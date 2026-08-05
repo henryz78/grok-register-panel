@@ -268,6 +268,35 @@ def check_email_api(provider: str, config: dict, http_get: Callable, http_post: 
                 return "邮箱API", True, "iDataRiver 接口可达（apikey 有效性将在注册时验证）"
             return "邮箱API", True, "iDataRiver 接口可达"
 
+        if provider == "catchthis":
+            from email_providers import catchthis as catchthis_provider
+
+            base = catchthis_provider.normalize_base(
+                str(
+                    config.get("catchthis_api_base")
+                    or catchthis_provider.API_BASE_DEFAULT
+                )
+            )
+            key = str(config.get("catchthis_api_key") or "").strip()
+            if not base:
+                return "邮箱API", False, "未配置 catchthis_api_base"
+            if not key:
+                return "邮箱API", False, "未配置 catchthis_api_key"
+            # 不带 token 探测接口可达性（期望 401），不消耗邮箱配额
+            try:
+                resp = http_get(
+                    f"{base}/inboxes/list",
+                    headers={"Accept": "application/json"},
+                    timeout=12,
+                    proxies={},
+                )
+            except Exception as exc:
+                return "邮箱API", False, f"CatchThis 请求失败: {redact_log_line(str(exc))}"
+            status = int(getattr(resp, "status_code", 0) or 0)
+            if status in (401, 403):
+                return "邮箱API", True, "CatchThis 接口可达（API Key 有效性将在注册时验证）"
+            return "邮箱API", True, f"CatchThis 接口可达 HTTP {status}"
+
         return "邮箱API", True, f"提供商 {provider} 跳过深度探测"
     except Exception as exc:
         return "邮箱API", False, redact_log_line(str(exc))

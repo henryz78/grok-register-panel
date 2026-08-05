@@ -7,4 +7,5 @@
 - cloudmail: maillab/cloud-mail
 - moemail: MoeMail OpenAPI
 - idatariver: iDataRiver Temp Mail API（cbea），请求直连
+- catchthis: CatchThis 临时邮箱，Bearer 认证，请求直连
 """

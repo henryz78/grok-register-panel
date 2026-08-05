@@ -27,6 +27,7 @@ PROVIDER_LABELS = {
     "cloudmail": "CloudMail",
     "moemail": "MoeMail",
     "idatariver": "iDataRiver",
+    "catchthis": "CatchThis",
 }
 SUPPORTED_PROVIDERS = tuple(PROVIDER_LABELS)
 
@@ -168,6 +169,18 @@ FIELD_DEFINITIONS = {
         "secret": True,
         "placeholder": "idr_***",
     },
+    "catchthis_api_base": {
+        "label": "接口地址",
+        "type": "url",
+        "default": "https://catchthis.email/api/v1",
+        "placeholder": "https://catchthis.email/api/v1",
+    },
+    "catchthis_api_key": {
+        "label": "API Key",
+        "type": "password",
+        "secret": True,
+        "placeholder": "Bearer 令牌",
+    },
 }
 
 PROVIDER_FIELDS = {
@@ -200,6 +213,10 @@ PROVIDER_FIELDS = {
     "idatariver": (
         "idatariver_api_base",
         "idatariver_api_key",
+    ),
+    "catchthis": (
+        "catchthis_api_base",
+        "catchthis_api_key",
     ),
 }
 
@@ -364,6 +381,8 @@ def _is_configured(provider: str, values: dict) -> bool:
         return bool(values.get("moemail_api_base") and values.get("moemail_api_key"))
     if provider == "idatariver":
         return bool(values.get("idatariver_api_key"))
+    if provider == "catchthis":
+        return bool(values.get("catchthis_api_key"))
     return False
 
 
