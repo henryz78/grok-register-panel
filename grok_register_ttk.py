@@ -35,6 +35,7 @@ import sso_to_auth_json as _s2cpa
 from email_providers import cloudflare as cloudflare_provider
 from email_providers import cloudmail as cloudmail_provider
 from email_providers import duckmail as duckmail_provider
+from email_providers import idatariver as idatariver_provider
 from email_providers import mailnest as mailnest_provider
 from email_providers import moemail as moemail_provider
 from email_providers import yyds as yyds_provider
@@ -229,6 +230,9 @@ DEFAULT_CONFIG = {
     "moemail_api_key": "",
     "moemail_domain": "",
     "moemail_expiry_ms": moemail_provider.DEFAULT_EXPIRY_MS,
+    # iDataRiver：Temp Mail API（cbea），apikey 查询参数认证，请求直连
+    "idatariver_api_base": "",
+    "idatariver_api_key": "",
     # 账号间注册间隔（秒），0=不等待。填一个整数=N秒固定等待，填区间"60-120"=随机等待
     "account_interval": "60-120",
 }
@@ -557,6 +561,9 @@ EXTENSION_PATH = ""
 
 
 DUCKMAIL_API_BASE_DEFAULT = duckmail_provider.API_BASE_DEFAULT
+
+# iDataRiver Temp Mail API（cbea）公共接口地址
+IDATARIVER_API_BASE_DEFAULT = idatariver_provider.normalize_base("https://apiok.us")
 
 
 # 每 worker 可绑定独立代理（Clash listener 端口），避免 8 并发挤同一 sticky
@@ -1453,6 +1460,59 @@ def moemail_get_oai_code(
     )
 
 
+def get_idatariver_api_base():
+    raw = (
+        os.environ.get("IDATARIVER_API_BASE")
+        or config.get("idatariver_api_base")
+        or IDATARIVER_API_BASE_DEFAULT
+        or ""
+    )
+    return idatariver_provider.normalize_base(str(raw))
+
+
+def get_idatariver_api_key():
+    return str(
+        os.environ.get("IDATARIVER_API_KEY")
+        or config.get("idatariver_api_key", "")
+        or ""
+    ).strip()
+
+
+def idatariver_get_email_and_token(domain=""):
+    return idatariver_provider.create_mailbox(
+        http_get,
+        http_post,
+        get_idatariver_api_base(),
+        get_idatariver_api_key(),
+    )
+
+
+def idatariver_get_oai_code(
+    email_id,
+    email,
+    timeout=180,
+    poll_interval=6,
+    log_callback=None,
+    cancel_callback=None,
+    resend_callback=None,
+):
+    return idatariver_provider.wait_for_code(
+        http_get,
+        get_idatariver_api_base(),
+        get_idatariver_api_key(),
+        email_id,
+        email=email,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        http_delete=http_delete,
+        raise_if_cancelled=raise_if_cancelled,
+        sleep_with_cancel=sleep_with_cancel,
+        log_callback=log_callback,
+        cancel_callback=cancel_callback,
+        resend_callback=resend_callback,
+    )
+
+
 def cloudmail_get_oai_code(
     dev_token,
     email,
@@ -1545,6 +1605,8 @@ def get_email_and_token(api_key=None):
         return cloudmail_get_email_and_token(domain=managed_domain)
     if provider == "moemail":
         return moemail_get_email_and_token(domain=managed_domain)
+    if provider == "idatariver":
+        return idatariver_get_email_and_token(domain=managed_domain)
     if provider == "cloudflare":
         api_base = get_cloudflare_api_base()
         if not api_base:
@@ -1611,6 +1673,16 @@ def get_oai_code(
         )
     if provider == "moemail":
         return moemail_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+            resend_callback=resend_callback,
+        )
+    if provider == "idatariver":
+        return idatariver_get_oai_code(
             dev_token,
             email,
             timeout=timeout,
@@ -2340,7 +2412,7 @@ class GrokRegisterGUI:
         self.email_provider_combo = tk_option_menu(
             config_frame,
             self.email_provider_var,
-            ["duckmail", "yyds", "cloudflare", "mailnest", "cloudmail", "moemail"],
+            ["duckmail", "yyds", "cloudflare", "mailnest", "cloudmail", "moemail", "idatariver"],
             width=12,
         )
         add_field(self.email_provider_combo, 0, 1, sticky=tk.W)
@@ -2598,6 +2670,44 @@ class GrokRegisterGUI:
             ),
         ]
 
+        # iDataRiver
+        self.idatariver_api_base_var = tk.StringVar(
+            value=str(
+                config.get("idatariver_api_base")
+                or get_idatariver_api_base()
+                or ""
+            )
+        )
+        self.idatariver_api_key_var = tk.StringVar(
+            value=str(config.get("idatariver_api_key", "") or "")
+        )
+        self._idatariver_widgets = [
+            p_label(0, 0, "接口地址:"),
+            p_field(
+                tk_entry(self.provider_frame, textvariable=self.idatariver_api_base_var, width=52),
+                0,
+                1,
+                columnspan=3,
+            ),
+            p_label(1, 0, "API Key:"),
+            p_field(
+                tk_entry(self.provider_frame, textvariable=self.idatariver_api_key_var, width=34, show="*"),
+                1,
+                1,
+            ),
+            p_label(1, 2, "说明:"),
+            p_field(
+                tk_label(
+                    self.provider_frame,
+                    text="iDataRiver 临时邮箱，apikey 认证，请求直连",
+                    bg=UI_PANEL_BG,
+                ),
+                1,
+                3,
+                sticky=tk.W,
+            ),
+        ]
+
         self._provider_widget_groups = {
             "duckmail": self._duckmail_widgets,
             "cloudflare": self._cloudflare_widgets,
@@ -2605,6 +2715,7 @@ class GrokRegisterGUI:
             "mailnest": self._mailnest_widgets,
             "cloudmail": self._cloudmail_widgets,
             "moemail": self._moemail_widgets,
+            "idatariver": self._idatariver_widgets,
         }
 
         add_label(3, 0, "并发数（可选）:")
@@ -2781,6 +2892,7 @@ class GrokRegisterGUI:
             "mailnest": "MailNest 配置",
             "cloudmail": "CloudMail 配置",
             "moemail": "MoeMail 配置",
+            "idatariver": "iDataRiver 配置",
         }
         self.provider_frame.configure(text=titles.get(provider, "邮箱服务商配置"))
         for widgets in self._provider_widget_groups.values():
@@ -2870,6 +2982,8 @@ class GrokRegisterGUI:
             config["moemail_api_base"] = self.moemail_api_base_var.get().strip()
             config["moemail_api_key"] = self.moemail_api_key_var.get().strip()
             config["moemail_domain"] = self.moemail_domain_var.get().strip().lstrip("@")
+            config["idatariver_api_base"] = self.idatariver_api_base_var.get().strip()
+            config["idatariver_api_key"] = self.idatariver_api_key_var.get().strip()
             config["moemail_expiry_ms"] = int(
                 self.moemail_expiry_ms_var.get().strip()
                 or moemail_provider.DEFAULT_EXPIRY_MS
@@ -2990,6 +3104,8 @@ class GrokRegisterGUI:
             )
         except ValueError:
             config["moemail_expiry_ms"] = moemail_provider.DEFAULT_EXPIRY_MS
+        config["idatariver_api_base"] = self.idatariver_api_base_var.get().strip()
+        config["idatariver_api_key"] = self.idatariver_api_key_var.get().strip()
         config["cpa_auto_add"] = bool(self.cpa_auto_add_var.get())
         _mode_text = str(self.cpa_token_mode_var.get()).strip()
         if "协议" in _mode_text:
@@ -3026,6 +3142,10 @@ class GrokRegisterGUI:
                 missing.append("MoeMail API Key")
             if missing:
                 self.log(f"[!] MoeMail 模式缺少配置: {', '.join(missing)}")
+                return
+        if config["email_provider"] == "idatariver":
+            if not get_idatariver_api_key():
+                self.log("[!] iDataRiver 模式需要先填写 API Key")
                 return
         if config["email_provider"] == "cloudmail":
             missing = []

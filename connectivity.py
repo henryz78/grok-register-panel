@@ -234,6 +234,40 @@ def check_email_api(provider: str, config: dict, http_get: Callable, http_post: 
                 detail += f"；域名 {domains[:80]}"
             return "邮箱API", True, detail
 
+        if provider == "idatariver":
+            from email_providers import idatariver as idatariver_provider
+
+            base = idatariver_provider.normalize_base(
+                str(
+                    config.get("idatariver_api_base")
+                    or "https://apiok.us"
+                )
+            )
+            key = str(config.get("idatariver_api_key") or "").strip()
+            if not base:
+                return "邮箱API", False, "未配置 idatariver_api_base"
+            if not key:
+                return "邮箱API", False, "未配置 idatariver_api_key"
+            # 不带 apikey 探测接口可达性（返回 code=1001），不消耗生成配额
+            try:
+                resp = http_get(
+                    f"{base}/generate/v1",
+                    headers={"Accept": "application/json"},
+                    timeout=12,
+                    proxies={},
+                )
+            except Exception as exc:
+                return "邮箱API", False, f"iDataRiver 请求失败: {redact_log_line(str(exc))}"
+            if int(getattr(resp, "status_code", 0) or 0) >= 400:
+                return "邮箱API", False, f"iDataRiver HTTP {resp.status_code}"
+            try:
+                data = resp.json()
+            except Exception:
+                return "邮箱API", True, "iDataRiver 接口可达（apikey 有效性将在注册时验证）"
+            if isinstance(data, dict) and data.get("code") in (0, 1001, 1005):
+                return "邮箱API", True, "iDataRiver 接口可达（apikey 有效性将在注册时验证）"
+            return "邮箱API", True, "iDataRiver 接口可达"
+
         return "邮箱API", True, f"提供商 {provider} 跳过深度探测"
     except Exception as exc:
         return "邮箱API", False, redact_log_line(str(exc))

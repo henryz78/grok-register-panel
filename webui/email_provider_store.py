@@ -26,6 +26,7 @@ PROVIDER_LABELS = {
     "mailnest": "MailNest",
     "cloudmail": "CloudMail",
     "moemail": "MoeMail",
+    "idatariver": "iDataRiver",
 }
 SUPPORTED_PROVIDERS = tuple(PROVIDER_LABELS)
 
@@ -155,6 +156,18 @@ FIELD_DEFINITIONS = {
             {"value": 0, "label": "永久"},
         ],
     },
+    "idatariver_api_base": {
+        "label": "接口地址",
+        "type": "url",
+        "default": "https://apiok.us/api/cbea",
+        "placeholder": "https://apiok.us/api/cbea",
+    },
+    "idatariver_api_key": {
+        "label": "API Key",
+        "type": "password",
+        "secret": True,
+        "placeholder": "idr_***",
+    },
 }
 
 PROVIDER_FIELDS = {
@@ -183,6 +196,10 @@ PROVIDER_FIELDS = {
         "moemail_api_key",
         "moemail_domain",
         "moemail_expiry_ms",
+    ),
+    "idatariver": (
+        "idatariver_api_base",
+        "idatariver_api_key",
     ),
 }
 
@@ -345,6 +362,8 @@ def _is_configured(provider: str, values: dict) -> bool:
         )
     if provider == "moemail":
         return bool(values.get("moemail_api_base") and values.get("moemail_api_key"))
+    if provider == "idatariver":
+        return bool(values.get("idatariver_api_key"))
     return False
 
 
