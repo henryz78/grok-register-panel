@@ -98,7 +98,7 @@ def _raise_http(resp, action: str) -> None:
 
 
 def _unwrap(data: Any, action: str) -> Any:
-    """兼容 {code,data}, 裸对象, {success,data}, 顶层业务字段 等包装。"""
+    """兼容 {code,data}, {code,result}, 裸对象, {success,data}, 顶层业务字段 等包装。"""
     if not isinstance(data, dict):
         return data
     code = data.get("code")
@@ -125,12 +125,16 @@ def _unwrap(data: Any, action: str) -> Any:
             or data
         )
         raise Exception(f"iDataRiver {action} 业务失败: {msg}")
-    if "data" in data:
-        payload = data.get("data")
-        # 若顶层已有业务字段则优先顶层
-        if any(k in data for k in ("id", "email", "address", "messages", "message", "messageId", "emails")):
-            return data
-        return payload
+    # 顶层已有业务字段则优先顶层
+    if any(k in data for k in ("id", "email", "address", "messages", "message", "messageId", "emails")):
+        return data
+    # 否则剥常见包装层（generate 接口实际用 result，而非 data）
+    for key in ("data", "result", "response", "payload"):
+        payload = data.get(key)
+        if isinstance(payload, dict) and payload:
+            return payload
+        if isinstance(payload, list) and payload:
+            return payload
     return data
 
 
@@ -183,10 +187,10 @@ def create_mailbox(
             address = str(data.get(k) or "").strip()
             break
 
-    # id 常为邮箱地址的 base64；据此兜底恢复地址
-    if not address and email_id:
-        decoded = _try_b64_decode(email_id)
-        if decoded and "@" in decoded:
+    # id 常为邮箱地址的 base64；email 字段常被打码（如 il***@domain），据此恢复真实地址
+    decoded = _decode_b64(email_id) if email_id else ""
+    if "@" in decoded:
+        if "*" in address or not address:
             address = decoded
     if not email_id and address:
         email_id = _b64_encode(address)

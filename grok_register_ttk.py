@@ -4256,7 +4256,7 @@ def run_registration_cli(count):
             wait_sec = parse_account_interval()
             if wait_sec > 0:
                 cli_log(f"[*] 下一个账号前等待 {wait_sec:.0f} 秒...")
-                _sleep_cancelable(wait_sec, controller.should_stop)
+                sleep_with_cancel(wait_sec, controller.should_stop)
             try:
                 stop_browser()
                 time.sleep(0.5)
