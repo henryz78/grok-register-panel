@@ -647,6 +647,25 @@ def get_proxies():
     return {}
 
 
+_PROXY_DEAD_MARKERS = (
+    "无法解析出口 IP",
+    "Failed to get IP address",
+    "Failed to get IP",
+    "代理不可用或过慢",
+    "出口IP命中黑名单",
+    "命中黑名单",
+    "面板代理池没有健康且启用的代理",
+    "Could not connect to",
+    "Connection refused",
+)
+
+
+def _is_proxy_dead_error(exc) -> bool:
+    """判断浏览器启动失败是否源于代理不可用，用于回退直连。"""
+    msg = str(exc or "")
+    return any(m in msg for m in _PROXY_DEAD_MARKERS)
+
+
 def record_proxy_boot_failure(proxy: str, exc) -> None:
     """Apply runtime cooldown to managed proxies without touching legacy entries."""
     message = str(exc or "")
@@ -3288,6 +3307,17 @@ class GrokRegisterGUI:
             try:
                 start_browser(log_callback=wlog)
             except Exception as boot_exc:
+                if _is_proxy_dead_error(boot_exc):
+                    # 配置/面板代理不可用 → 回退直连再试一次
+                    wlog(f"[!] 代理不可用，回退直连: {redact_sensitive_log_line(str(boot_exc))}")
+                    set_thread_proxy("")
+                    try:
+                        start_browser(log_callback=wlog)
+                    except Exception as direct_exc:
+                        boot_exc = direct_exc
+                    else:
+                        boot_exc = None
+            if boot_exc is not None:
                 streak = get_start_fail_streak()
                 wlog(
                     f"[-] 浏览器启动失败 (连续失败 {streak}): "
@@ -3589,21 +3619,21 @@ def run_registration_cli(count):
                 try:
                     px = pick_proxy_for_worker(wid, rotate_idx)
                 except Exception as proxy_exc:
-                    local_fail = n
-                    local_fail_stats[FAIL_BROWSER] = local_fail_stats.get(FAIL_BROWSER, 0) + n
+                    # 无可用代理 → 回退直连，避免整批失败
                     cli_log(
-                        f"[W{wid+1}] [-] 没有可用代理，停止该 worker: "
+                        f"[W{wid+1}] [!] 没有可用代理，回退直连: "
                         f"{redact_sensitive_log_line(str(proxy_exc))}"
                     )
-                    return
+                    px = ""
                 set_thread_proxy(px)
-                cli_log(f"[W{wid+1}] [*] 绑定代理: {redact_proxy(px)}")
+                cli_log(f"[W{wid+1}] [*] 绑定代理: {redact_proxy(px) or '直连'}")
+                booted = False
                 try:
                     start_browser(log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"))
+                    booted = True
                 except Exception as boot_exc:
                     record_proxy_boot_failure(px, boot_exc)
                     # 黑名单/死代理：多换几条 sticky 再放弃
-                    booted = False
                     last_boot = boot_exc
                     for _try in range(1, 12):
                         msgb = str(last_boot)
@@ -3629,22 +3659,31 @@ def run_registration_cli(count):
                             last_boot = boot2
                             record_proxy_boot_failure(px, boot2)
                             continue
-                    if not booted:
-                        local_fail = n
-                        local_fail_stats[FAIL_BROWSER] = local_fail_stats.get(FAIL_BROWSER, 0) + n
-                        mark_slot_completed(n)
-                        cli_log(
-                            f"[W{wid+1}] [-] 浏览器启动失败，{n} 个任务均记为失败: "
-                            f"{redact_sensitive_log_line(str(last_boot))}"
-                        )
-                        record_register_result(
-                            "fail",
-                            kind=FAIL_BROWSER,
-                            detail=str(last_boot)[:300],
-                            worker=f"W{wid+1}",
-                            log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
-                        )
-                        return
+                if not booted:
+                    # 代理都失败 → 回退直连
+                    try:
+                        set_thread_proxy("")
+                        cli_log(f"[W{wid+1}] [*] 代理不可用，回退直连")
+                        start_browser(log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"))
+                        booted = True
+                    except Exception as direct_exc:
+                        last_boot = direct_exc
+                if not booted:
+                    local_fail = n
+                    local_fail_stats[FAIL_BROWSER] = local_fail_stats.get(FAIL_BROWSER, 0) + n
+                    mark_slot_completed(n)
+                    cli_log(
+                        f"[W{wid+1}] [-] 浏览器启动失败，{n} 个任务均记为失败: "
+                        f"{redact_sensitive_log_line(str(last_boot))}"
+                    )
+                    record_register_result(
+                        "fail",
+                        kind=FAIL_BROWSER,
+                        detail=str(last_boot)[:300],
+                        worker=f"W{wid+1}",
+                        log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
+                    )
+                    return
                 i = 0
                 retry = 0
                 worker_stop = False
@@ -3859,16 +3898,26 @@ def run_registration_cli(count):
                                 last_boot = boot_exc
                                 record_proxy_boot_failure(px, boot_exc)
                                 if "面板代理池没有健康且启用的代理" in str(boot_exc):
-                                    remaining = max(n - i, 0)
-                                    local_fail += remaining
-                                    local_fail_stats[FAIL_BROWSER] = (
-                                        local_fail_stats.get(FAIL_BROWSER, 0) + remaining
-                                    )
-                                    cli_log(
-                                        f"[W{wid+1}] [-] 健康代理已耗尽，停止该 worker: "
-                                        f"{redact_sensitive_log_line(str(boot_exc))}"
-                                    )
-                                    worker_stop = True
+                                    # 代理池耗尽 → 回退直连继续，不再整批失败
+                                    try:
+                                        set_thread_proxy("")
+                                        cli_log(
+                                            f"[W{wid+1}] [*] 健康代理已耗尽，回退直连: "
+                                            f"{redact_sensitive_log_line(str(boot_exc))}"
+                                        )
+                                        start_browser(log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"))
+                                        time.sleep(0.5)
+                                    except Exception as direct_exc:
+                                        remaining = max(n - i, 0)
+                                        local_fail += remaining
+                                        local_fail_stats[FAIL_BROWSER] = (
+                                            local_fail_stats.get(FAIL_BROWSER, 0) + remaining
+                                        )
+                                        cli_log(
+                                            f"[W{wid+1}] [-] 直连启动也失败，停止该 worker: "
+                                            f"{redact_sensitive_log_line(str(direct_exc))}"
+                                        )
+                                        worker_stop = True
                                 else:
                                     for _try in range(1, 10):
                                         msgb = str(last_boot)
@@ -3894,16 +3943,27 @@ def run_registration_cli(count):
                                             last_boot = boot2
                                             record_proxy_boot_failure(px, boot2)
                                             if "面板代理池没有健康且启用的代理" in str(boot2):
-                                                remaining = max(n - i, 0)
-                                                local_fail += remaining
-                                                local_fail_stats[FAIL_BROWSER] = (
-                                                    local_fail_stats.get(FAIL_BROWSER, 0) + remaining
-                                                )
-                                                cli_log(
-                                                    f"[W{wid+1}] [-] 健康代理已耗尽，停止该 worker: "
-                                                    f"{redact_sensitive_log_line(str(boot2))}"
-                                                )
-                                                worker_stop = True
+                                                try:
+                                                    set_thread_proxy("")
+                                                    cli_log(
+                                                        f"[W{wid+1}] [*] 健康代理已耗尽，回退直连: "
+                                                        f"{redact_sensitive_log_line(str(boot2))}"
+                                                    )
+                                                    start_browser(log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"))
+                                                    time.sleep(0.5)
+                                                    last_boot = None
+                                                except Exception as direct2:
+                                                    last_boot = direct2
+                                                    remaining = max(n - i, 0)
+                                                    local_fail += remaining
+                                                    local_fail_stats[FAIL_BROWSER] = (
+                                                        local_fail_stats.get(FAIL_BROWSER, 0) + remaining
+                                                    )
+                                                    cli_log(
+                                                        f"[W{wid+1}] [-] 直连启动也失败，停止该 worker: "
+                                                        f"{redact_sensitive_log_line(str(direct2))}"
+                                                    )
+                                                    worker_stop = True
                                                 break
                                     if last_boot is not None and not worker_stop:
                                         cli_log(
@@ -3962,6 +4022,16 @@ def run_registration_cli(count):
                 last_boot = boot_exc
                 record_proxy_boot_failure(px, boot_exc)
                 single_rotate_idx += 1
+        if last_boot is not None and _is_proxy_dead_error(last_boot):
+            # 代理不可用 → 回退直连再试一次
+            cli_log("[!] 配置代理不可用，回退直连重试")
+            try:
+                set_thread_proxy("")
+                cli_log("[*] 绑定代理: 直连")
+                start_browser(log_callback=cli_log)
+                last_boot = None
+            except Exception as direct_exc:
+                last_boot = direct_exc
         if last_boot is not None:
             fail_count += count
             fail_stats[FAIL_BROWSER] = fail_stats.get(FAIL_BROWSER, 0) + count
@@ -4193,14 +4263,12 @@ def run_registration_cli(count):
                 set_thread_proxy(px)
                 cli_log(f"[*] 下号代理: {redact_proxy(px) or '直连'}")
             except Exception as proxy_exc:
+                # 无可用代理 → 回退直连继续，不再中断剩余任务
                 cli_log(
-                    f"[-] 下号没有可用代理: "
+                    f"[!] 下号没有可用代理，回退直连继续: "
                     f"{redact_sensitive_log_line(str(proxy_exc))}"
                 )
-                remaining = max(count - i, 0)
-                fail_count += remaining
-                fail_stats[FAIL_BROWSER] = fail_stats.get(FAIL_BROWSER, 0) + remaining
-                break
+                set_thread_proxy("")
     except KeyboardInterrupt:
         controller.stop()
         cli_log("[!] 收到 Ctrl+C，正在停止并清理")
