@@ -568,6 +568,7 @@ IDATARIVER_API_BASE_DEFAULT = idatariver_provider.normalize_base("https://apiok.
 
 # 每 worker 可绑定独立代理（Clash listener 端口），避免 8 并发挤同一 sticky
 _proxy_tls = threading.local()
+_proxy_direct = threading.local()
 _proxy_pool: list = []
 _proxy_pool_lock = threading.Lock()
 _proxy_pool_source = "none"
@@ -616,8 +617,17 @@ def load_proxy_pool(path: str = "") -> list:
         return list(_proxy_pool)
 
 
+def set_proxy_direct():
+    """强制当前线程后续所有请求直连，忽略 config.proxy / 线程代理。"""
+    _proxy_direct.on = True
+    _proxy_tls.proxy = ""
+
+
 def set_thread_proxy(proxy: str):
-    _proxy_tls.proxy = str(proxy or "").strip()
+    proxy = str(proxy or "").strip()
+    if proxy:
+        _proxy_direct.on = False
+    _proxy_tls.proxy = proxy
 
 
 def get_thread_proxy() -> str:
@@ -641,6 +651,8 @@ def pick_proxy_for_worker(worker_id: int, rotate_idx: int = 0) -> str:
 
 
 def get_proxies():
+    if getattr(_proxy_direct, "on", False):
+        return {}
     proxy = get_thread_proxy() or str(config.get("proxy", "") or "").strip()
     if proxy:
         return {"http": proxy, "https": proxy}
@@ -3310,7 +3322,7 @@ class GrokRegisterGUI:
                 if _is_proxy_dead_error(boot_exc):
                     # 配置/面板代理不可用 → 回退直连再试一次
                     wlog(f"[!] 代理不可用，回退直连: {redact_sensitive_log_line(str(boot_exc))}")
-                    set_thread_proxy("")
+                    set_proxy_direct()
                     try:
                         start_browser(log_callback=wlog)
                     except Exception as direct_exc:
@@ -3662,7 +3674,7 @@ def run_registration_cli(count):
                 if not booted:
                     # 代理都失败 → 回退直连
                     try:
-                        set_thread_proxy("")
+                        set_proxy_direct()
                         cli_log(f"[W{wid+1}] [*] 代理不可用，回退直连")
                         start_browser(log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"))
                         booted = True
@@ -3900,7 +3912,7 @@ def run_registration_cli(count):
                                 if "面板代理池没有健康且启用的代理" in str(boot_exc):
                                     # 代理池耗尽 → 回退直连继续，不再整批失败
                                     try:
-                                        set_thread_proxy("")
+                                        set_proxy_direct()
                                         cli_log(
                                             f"[W{wid+1}] [*] 健康代理已耗尽，回退直连: "
                                             f"{redact_sensitive_log_line(str(boot_exc))}"
@@ -3944,7 +3956,7 @@ def run_registration_cli(count):
                                             record_proxy_boot_failure(px, boot2)
                                             if "面板代理池没有健康且启用的代理" in str(boot2):
                                                 try:
-                                                    set_thread_proxy("")
+                                                    set_proxy_direct()
                                                     cli_log(
                                                         f"[W{wid+1}] [*] 健康代理已耗尽，回退直连: "
                                                         f"{redact_sensitive_log_line(str(boot2))}"
@@ -4026,7 +4038,7 @@ def run_registration_cli(count):
             # 代理不可用 → 回退直连再试一次
             cli_log("[!] 配置代理不可用，回退直连重试")
             try:
-                set_thread_proxy("")
+                set_proxy_direct()
                 cli_log("[*] 绑定代理: 直连")
                 start_browser(log_callback=cli_log)
                 last_boot = None
@@ -4268,7 +4280,7 @@ def run_registration_cli(count):
                     f"[!] 下号没有可用代理，回退直连继续: "
                     f"{redact_sensitive_log_line(str(proxy_exc))}"
                 )
-                set_thread_proxy("")
+                set_proxy_direct()
     except KeyboardInterrupt:
         controller.stop()
         cli_log("[!] 收到 Ctrl+C，正在停止并清理")
