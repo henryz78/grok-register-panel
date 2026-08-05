@@ -846,6 +846,8 @@ def _normalize_sso_token(raw_token):
 
 def _resolve_cpa_proxy():
     """CPA 换 token 用的代理：优先线程绑定 / config.proxy，其次环境变量，否则直连。"""
+    if getattr(_proxy_direct, "on", False):
+        return ""
     proxy = get_thread_proxy() or str(config.get("proxy", "") or "").strip()
     if proxy:
         return proxy

@@ -1085,6 +1085,14 @@ HTML = r"""<!DOCTYPE html>
     line-height: 1;
   }
   button.view-switch:hover { border-color: var(--hover-border); color: var(--text); }
+  button.mini {
+    min-height: 28px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 620;
+    line-height: 1;
+  }
+  button.mini:hover { border-color: var(--hover-border); }
   button.view-switch[data-active="true"] {
     border-color: var(--accent);
     background: var(--accent);
@@ -2166,7 +2174,10 @@ HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <section class="card panel">
-    <div class="section-head"><h2>日志尾部</h2></div>
+    <div class="section-head">
+      <h2>日志尾部</h2>
+      <button type="button" class="mini" id="copy-log-btn" onclick="copyLog()">复制日志</button>
+    </div>
     <div class="tail mono" id="tail"></div>
   </section>
   <footer id="footer"></footer>
@@ -2349,6 +2360,34 @@ function getToken() {
   const tok = (fromInput || window.MONITOR_TOKEN || localStorage.getItem("MONITOR_TOKEN") || "").trim();
   if (fromInput) try { localStorage.setItem("MONITOR_TOKEN", fromInput); } catch (e) {}
   return tok;
+}
+function copyLog() {
+  const el = document.getElementById("tail");
+  const text = (el && el.textContent) || "";
+  const done = () => {
+    const btn = document.getElementById("copy-log-btn");
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = "已复制";
+      setTimeout(() => { btn.textContent = prev; }, 1200);
+    }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  if (done) done();
 }
 function loadTokenField() {
   const el = document.getElementById("monitor-token");
