@@ -291,7 +291,59 @@ def check_email_api(provider: str, config: dict, http_get: Callable, http_post: 
                 ok = False
             if "refresh 失败" in detail:
                 ok = False
-            return "邮箱API", ok, detail[:300]
+            return "邮箱API", ok, f"Outlook RT: {detail}"
+
+        if provider == "idatariver":
+            from email_providers import idatariver as idatariver_provider
+
+            base = idatariver_provider.normalize_base(
+                str(config.get("idatariver_api_base") or idatariver_provider.API_BASE_DEFAULT)
+            )
+            key = str(config.get("idatariver_api_key") or "").strip()
+            if not base:
+                return "邮箱API", False, "未配置 idatariver_api_base"
+            if not key:
+                return "邮箱API", False, "未配置 idatariver_api_key"
+            try:
+                resp = http_get(
+                    f"{base}/generate/v1",
+                    headers={"Accept": "application/json"},
+                    timeout=12,
+                    proxies={},
+                )
+            except Exception as exc:
+                return "邮箱API", False, f"iDataRiver 请求失败: {redact_log_line(str(exc))}"
+            status = int(getattr(resp, "status_code", 0) or 0)
+            if status in (200, 400, 401, 403, 422):
+                return "邮箱API", True, "iDataRiver 接口可达（apikey 将在注册时验证）"
+            if status >= 500:
+                return "邮箱API", False, f"iDataRiver 服务端异常 HTTP {status}"
+            return "邮箱API", True, f"iDataRiver 接口可达 HTTP {status}"
+
+        if provider == "catchthis":
+            from email_providers import catchthis as catchthis_provider
+
+            base = catchthis_provider.normalize_base(
+                str(config.get("catchthis_api_base") or catchthis_provider.API_BASE_DEFAULT)
+            )
+            key = str(config.get("catchthis_api_key") or "").strip()
+            if not base:
+                return "邮箱API", False, "未配置 catchthis_api_base"
+            if not key:
+                return "邮箱API", False, "未配置 catchthis_api_key"
+            try:
+                resp = http_get(
+                    f"{base}/inboxes/list",
+                    headers={"Accept": "application/json"},
+                    timeout=12,
+                    proxies={},
+                )
+            except Exception as exc:
+                return "邮箱API", False, f"CatchThis 请求失败: {redact_log_line(str(exc))}"
+            status = int(getattr(resp, "status_code", 0) or 0)
+            if status in (200, 401, 403):
+                return "邮箱API", True, "CatchThis 接口可达（API Key 将在注册时验证）"
+            return "邮箱API", True, f"CatchThis 接口可达 HTTP {status}"
 
         return "邮箱API", True, f"提供商 {provider} 跳过深度探测"
     except Exception as exc:

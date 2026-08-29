@@ -47,5 +47,9 @@
   "outlook_rt_client_id": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
   "inbucket_api_base": "",
   "inbucket_domain": "",
-  "inbucket_random_levels": "0"
+  "inbucket_random_levels": "0",
+  "idatariver_api_base": "https://apiok.us/api/cbea",
+  "idatariver_api_key": "",
+  "catchthis_api_base": "https://catchthis.email/api/v1",
+  "catchthis_api_key": ""
 }

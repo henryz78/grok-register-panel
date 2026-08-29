@@ -28,6 +28,8 @@ PROVIDER_LABELS = {
     "moemail": "MoeMail",
     "outlook_rt": "Outlook RT 库存",
     "inbucket": "Inbucket",
+    "idatariver": "iDataRiver",
+    "catchthis": "CatchThis",
 }
 SUPPORTED_PROVIDERS = tuple(PROVIDER_LABELS)
 
@@ -204,6 +206,30 @@ FIELD_DEFINITIONS = {
             {"value": "1-3", "label": "随机 1-3 级子域"},
         ],
     },
+    "idatariver_api_base": {
+        "label": "接口地址",
+        "type": "url",
+        "default": "https://apiok.us/api/cbea",
+        "placeholder": "https://apiok.us/api/cbea",
+    },
+    "idatariver_api_key": {
+        "label": "API Key",
+        "type": "password",
+        "secret": True,
+        "placeholder": "idr_***",
+    },
+    "catchthis_api_base": {
+        "label": "接口地址",
+        "type": "url",
+        "default": "https://catchthis.email/api/v1",
+        "placeholder": "https://catchthis.email/api/v1",
+    },
+    "catchthis_api_key": {
+        "label": "API Key",
+        "type": "password",
+        "secret": True,
+        "placeholder": "Bearer 令牌",
+    },
 }
 
 PROVIDER_FIELDS = {
@@ -240,6 +266,8 @@ PROVIDER_FIELDS = {
         "outlook_rt_client_id",
     ),
     "inbucket": ("inbucket_api_base", "inbucket_domain", "inbucket_random_levels"),
+    "idatariver": ("idatariver_api_base", "idatariver_api_key"),
+    "catchthis": ("catchthis_api_base", "catchthis_api_key"),
 }
 
 SECRET_FIELDS = {
@@ -416,6 +444,10 @@ def _is_configured(provider: str, values: dict) -> bool:
         return bool(inventory and Path(inventory).expanduser().is_file())
     if provider == "inbucket":
         return bool(values.get("inbucket_api_base") and values.get("inbucket_domain"))
+    if provider == "idatariver":
+        return bool(values.get("idatariver_api_key"))
+    if provider == "catchthis":
+        return bool(values.get("catchthis_api_key"))
     return False
 
 

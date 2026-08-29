@@ -56,6 +56,8 @@ def test_provider_schema_and_defaults():
             "moemail",
             "outlook_rt",
             "inbucket",
+            "idatariver",
+            "catchthis",
         }
         assert providers["outlook_rt"]["configured"] is False
         assert any(
@@ -313,6 +315,37 @@ def test_inbucket_requires_base_and_domain():
         )
 
 
+def test_idatariver_and_catchthis_save_and_secrets():
+    with IsolatedConfig() as config_path:
+        saved_idr = email_provider_store.save_email_provider_config(
+            "idatariver",
+            {
+                "idatariver_api_base": "https://apiok.us/api/cbea",
+                "idatariver_api_key": "idr_secret_key_123",
+            },
+        )
+        assert saved_idr["provider"] == "idatariver"
+        assert saved_idr["configured"] is True
+        assert saved_idr["values"]["idatariver_api_key"] == ""
+        assert saved_idr["secret_configured"]["idatariver_api_key"] is True
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        assert raw["idatariver_api_key"] == "idr_secret_key_123"
+
+        saved_ct = email_provider_store.save_email_provider_config(
+            "catchthis",
+            {
+                "catchthis_api_base": "https://catchthis.email/api/v1",
+                "catchthis_api_key": "ct_bearer_token_abc",
+            },
+        )
+        assert saved_ct["provider"] == "catchthis"
+        assert saved_ct["configured"] is True
+        assert saved_ct["values"]["catchthis_api_key"] == ""
+        assert saved_ct["secret_configured"]["catchthis_api_key"] is True
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        assert raw["catchthis_api_key"] == "ct_bearer_token_abc"
+
+
 if __name__ == "__main__":
     test_provider_schema_and_defaults()
     test_secret_masking_preservation_clear_and_private_file()
@@ -322,4 +355,5 @@ if __name__ == "__main__":
     test_cloudflare_direct_create_does_not_probe_admin_domains()
     test_cloudflare_admin_create_does_not_probe_mailbox_domains()
     test_inbucket_requires_base_and_domain()
+    test_idatariver_and_catchthis_save_and_secrets()
     print("OK email provider store")

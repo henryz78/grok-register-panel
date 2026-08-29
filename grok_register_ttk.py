@@ -36,6 +36,8 @@ from email_providers import cloudflare as cloudflare_provider
 from email_providers import cloudmail as cloudmail_provider
 from email_providers import duckmail as duckmail_provider
 from email_providers import inbucket as inbucket_provider
+from email_providers import idatariver as idatariver_provider
+from email_providers import catchthis as catchthis_provider
 from email_providers import mailnest as mailnest_provider
 from email_providers import moemail as moemail_provider
 from email_providers import outlook_rt as outlook_rt_provider
@@ -245,6 +247,12 @@ DEFAULT_CONFIG = {
     "outlook_rt_inventory": "",
     "outlook_rt_used_path": "",
     "outlook_rt_client_id": outlook_rt_provider.DEFAULT_CLIENT_ID,
+    # iDataRiver：cbea 临时邮箱 (apikey 认证)
+    "idatariver_api_base": idatariver_provider.API_BASE_DEFAULT,
+    "idatariver_api_key": "",
+    # CatchThis：临时邮箱 (Bearer 令牌认证)
+    "catchthis_api_base": catchthis_provider.API_BASE_DEFAULT,
+    "catchthis_api_key": "",
     # 账号间注册间隔（秒），0=不等待。填一个整数=N秒固定等待，填区间"60-120"=随机等待
     "account_interval": "60-120",
 }
@@ -811,6 +819,8 @@ def _url_needs_direct(url: str) -> bool:
         config.get("moemail_api_base"),
         config.get("duckmail_api_base"),
         config.get("inbucket_api_base"),
+        config.get("idatariver_api_base"),
+        config.get("catchthis_api_base"),
     )
     for value in configured_bases:
         base = str(value or "").strip().lower().rstrip("/")
@@ -1780,6 +1790,110 @@ def inbucket_get_oai_code(
     )
 
 
+def get_idatariver_api_base():
+    raw = (
+        os.environ.get("IDATARIVER_API_BASE")
+        or config.get("idatariver_api_base")
+        or idatariver_provider.API_BASE_DEFAULT
+    )
+    return idatariver_provider.normalize_base(str(raw))
+
+
+def get_idatariver_api_key():
+    return str(
+        os.environ.get("IDATARIVER_API_KEY")
+        or config.get("idatariver_api_key", "")
+        or ""
+    ).strip()
+
+
+def idatariver_get_email_and_token(domain=""):
+    return idatariver_provider.create_mailbox(
+        http_get,
+        http_post,
+        get_idatariver_api_base(),
+        get_idatariver_api_key(),
+    )
+
+
+def idatariver_get_oai_code(
+    email_id,
+    email,
+    timeout=180,
+    poll_interval=4,
+    log_callback=None,
+    cancel_callback=None,
+    resend_callback=None,
+):
+    return idatariver_provider.wait_for_code(
+        http_get,
+        get_idatariver_api_base(),
+        get_idatariver_api_key(),
+        email_id,
+        email=email,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        http_delete=http_delete,
+        raise_if_cancelled=raise_if_cancelled,
+        sleep_with_cancel=sleep_with_cancel,
+        log_callback=log_callback,
+        cancel_callback=cancel_callback,
+        resend_callback=resend_callback,
+    )
+
+
+def get_catchthis_api_base():
+    raw = (
+        os.environ.get("CATCHTHIS_API_BASE")
+        or config.get("catchthis_api_base")
+        or catchthis_provider.API_BASE_DEFAULT
+    )
+    return catchthis_provider.normalize_base(str(raw))
+
+
+def get_catchthis_api_key():
+    return str(
+        os.environ.get("CATCHTHIS_API_KEY")
+        or config.get("catchthis_api_key", "")
+        or ""
+    ).strip()
+
+
+def catchthis_get_email_and_token(domain=""):
+    return catchthis_provider.create_mailbox(
+        http_get,
+        http_post,
+        get_catchthis_api_base(),
+        get_catchthis_api_key(),
+    )
+
+
+def catchthis_get_oai_code(
+    mailbox,
+    email,
+    timeout=180,
+    poll_interval=4,
+    log_callback=None,
+    cancel_callback=None,
+    resend_callback=None,
+):
+    del mailbox
+    return catchthis_provider.wait_for_code(
+        http_get,
+        get_catchthis_api_base(),
+        get_catchthis_api_key(),
+        email,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        http_delete=http_delete,
+        raise_if_cancelled=raise_if_cancelled,
+        sleep_with_cancel=sleep_with_cancel,
+        log_callback=log_callback,
+        cancel_callback=cancel_callback,
+        resend_callback=resend_callback,
+    )
+
+
 def cloudmail_get_oai_code(
     dev_token,
     email,
@@ -1905,6 +2019,10 @@ def get_email_and_token(api_key=None):
         return mailnest_buy_email(), "_"
     if provider == "inbucket":
         return inbucket_get_email_and_token(domain=managed_domain)
+    if provider == "idatariver":
+        return idatariver_get_email_and_token(domain=managed_domain)
+    if provider == "catchthis":
+        return catchthis_get_email_and_token(domain=managed_domain)
     if provider == "outlook_rt":
         return outlook_rt_take_mailbox()
     return duckmail_provider.create_mailbox(
@@ -2039,6 +2157,26 @@ def get_oai_code(
         )
     if provider == "inbucket":
         return inbucket_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+            resend_callback=resend_callback,
+        )
+    if provider == "idatariver":
+        return idatariver_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+            resend_callback=resend_callback,
+        )
+    if provider == "catchthis":
+        return catchthis_get_oai_code(
             dev_token,
             email,
             timeout=timeout,
@@ -2766,7 +2904,10 @@ class GrokRegisterGUI:
                 "mailnest",
                 "cloudmail",
                 "moemail",
+                "inbucket",
                 "outlook_rt",
+                "idatariver",
+                "catchthis",
             ],
             width=12,
         )
@@ -3084,6 +3225,82 @@ class GrokRegisterGUI:
             ),
         ]
 
+        # iDataRiver
+        self.idatariver_api_base_var = tk.StringVar(
+            value=str(
+                config.get("idatariver_api_base")
+                or get_idatariver_api_base()
+                or ""
+            )
+        )
+        self.idatariver_api_key_var = tk.StringVar(
+            value=str(config.get("idatariver_api_key", "") or "")
+        )
+        self._idatariver_widgets = [
+            p_label(0, 0, "接口地址:"),
+            p_field(
+                tk_entry(self.provider_frame, textvariable=self.idatariver_api_base_var, width=52),
+                0,
+                1,
+                columnspan=3,
+            ),
+            p_label(1, 0, "API Key:"),
+            p_field(
+                tk_entry(self.provider_frame, textvariable=self.idatariver_api_key_var, width=34, show="*"),
+                1,
+                1,
+            ),
+            p_label(1, 2, "说明:"),
+            p_field(
+                tk_label(
+                    self.provider_frame,
+                    text="iDataRiver 临时邮箱 (cbea)，apikey 认证",
+                    bg=UI_PANEL_BG,
+                ),
+                1,
+                3,
+                sticky=tk.W,
+            ),
+        ]
+
+        # CatchThis
+        self.catchthis_api_base_var = tk.StringVar(
+            value=str(
+                config.get("catchthis_api_base")
+                or get_catchthis_api_base()
+                or ""
+            )
+        )
+        self.catchthis_api_key_var = tk.StringVar(
+            value=str(config.get("catchthis_api_key", "") or "")
+        )
+        self._catchthis_widgets = [
+            p_label(0, 0, "接口地址:"),
+            p_field(
+                tk_entry(self.provider_frame, textvariable=self.catchthis_api_base_var, width=52),
+                0,
+                1,
+                columnspan=3,
+            ),
+            p_label(1, 0, "API Key:"),
+            p_field(
+                tk_entry(self.provider_frame, textvariable=self.catchthis_api_key_var, width=34, show="*"),
+                1,
+                1,
+            ),
+            p_label(1, 2, "说明:"),
+            p_field(
+                tk_label(
+                    self.provider_frame,
+                    text="CatchThis 临时邮箱，Bearer 令牌认证",
+                    bg=UI_PANEL_BG,
+                ),
+                1,
+                3,
+                sticky=tk.W,
+            ),
+        ]
+
         self._provider_widget_groups = {
             "duckmail": self._duckmail_widgets,
             "cloudflare": self._cloudflare_widgets,
@@ -3092,6 +3309,8 @@ class GrokRegisterGUI:
             "cloudmail": self._cloudmail_widgets,
             "moemail": self._moemail_widgets,
             "outlook_rt": self._outlook_rt_widgets,
+            "idatariver": self._idatariver_widgets,
+            "catchthis": self._catchthis_widgets,
         }
 
         add_label(3, 0, "并发数（可选）:")
@@ -3269,6 +3488,8 @@ class GrokRegisterGUI:
             "cloudmail": "CloudMail 配置",
             "moemail": "MoeMail 配置",
             "outlook_rt": "Outlook RT 库存配置",
+            "idatariver": "iDataRiver 配置",
+            "catchthis": "CatchThis 配置",
         }
         self.provider_frame.configure(text=titles.get(provider, "邮箱服务商配置"))
         for widgets in self._provider_widget_groups.values():
@@ -3370,6 +3591,10 @@ class GrokRegisterGUI:
                 self.outlook_rt_client_id_var.get().strip()
                 or outlook_rt_provider.DEFAULT_CLIENT_ID
             )
+            config["idatariver_api_base"] = self.idatariver_api_base_var.get().strip()
+            config["idatariver_api_key"] = self.idatariver_api_key_var.get().strip()
+            config["catchthis_api_base"] = self.catchthis_api_base_var.get().strip()
+            config["catchthis_api_key"] = self.catchthis_api_key_var.get().strip()
             config["cpa_auto_add"] = bool(self.cpa_auto_add_var.get())
             _mode_text = str(self.cpa_token_mode_var.get()).strip()
             if "协议" in _mode_text:
@@ -3492,6 +3717,10 @@ class GrokRegisterGUI:
             self.outlook_rt_client_id_var.get().strip()
             or outlook_rt_provider.DEFAULT_CLIENT_ID
         )
+        config["idatariver_api_base"] = self.idatariver_api_base_var.get().strip()
+        config["idatariver_api_key"] = self.idatariver_api_key_var.get().strip()
+        config["catchthis_api_base"] = self.catchthis_api_base_var.get().strip()
+        config["catchthis_api_key"] = self.catchthis_api_key_var.get().strip()
         config["cpa_auto_add"] = bool(self.cpa_auto_add_var.get())
         _mode_text = str(self.cpa_token_mode_var.get()).strip()
         if "协议" in _mode_text:
@@ -3529,6 +3758,14 @@ class GrokRegisterGUI:
 
             if not _Path(inv).expanduser().is_file():
                 self.log(f"[!] Outlook RT 库存文件不存在: {inv}")
+                return
+        if config["email_provider"] == "idatariver":
+            if not get_idatariver_api_key():
+                self.log("[!] iDataRiver 模式需要先填写 API Key")
+                return
+        if config["email_provider"] == "catchthis":
+            if not get_catchthis_api_key():
+                self.log("[!] CatchThis 模式需要先填写 API Key")
                 return
         if config["email_provider"] == "moemail":
             missing = []
