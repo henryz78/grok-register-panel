@@ -253,6 +253,9 @@ DEFAULT_CONFIG = {
     # CatchThis：临时邮箱 (Bearer 令牌认证)
     "catchthis_api_base": catchthis_provider.API_BASE_DEFAULT,
     "catchthis_api_key": "",
+    # 注册模式："strict"（严格风控模式，默认：检查 botFlagSource/policy deny，并按 cpa_auto_add 执行换 token）
+    #           "conventional"（常规极速模式：跳过机器人标记检测，拿到 SSO 即算成功，自动关闭 CPA）
+    "registration_mode": "strict",
     # 账号间注册间隔（秒），0=不等待。填一个整数=N秒固定等待，填区间"60-120"=随机等待
     "account_interval": "60-120",
 }
@@ -1921,6 +1924,17 @@ def cloudmail_get_oai_code(
     )
 
 
+def get_registration_mode() -> str:
+    raw = str(config.get("registration_mode", "strict") or "strict").strip().lower()
+    if raw in ("conventional", "conv", "standard", "fast", "常规", "常规模式", "常规极速模式"):
+        return "conventional"
+    return "strict"
+
+
+def is_conventional_mode() -> bool:
+    return get_registration_mode() == "conventional"
+
+
 def get_email_provider():
     return str(config.get("email_provider", "cloudflare") or "cloudflare").strip().lower()
 
@@ -2946,6 +2960,17 @@ class GrokRegisterGUI:
         tk_label(opt_frame, text="日志:", bg=UI_PANEL_BG).pack(side=tk.LEFT, padx=(12, 2))
         self.log_level_combo = tk_option_menu(opt_frame, self.log_level_var, ["info", "debug"], width=6)
         self.log_level_combo.pack(side=tk.LEFT)
+        _cur_rmode = str(config.get("registration_mode", "strict") or "strict").strip().lower()
+        _rmode_display = "常规极速模式" if ("conv" in _cur_rmode or "常规" in _cur_rmode) else "严格风控模式"
+        self.registration_mode_var = tk.StringVar(value=_rmode_display)
+        tk_label(opt_frame, text="模式:", bg=UI_PANEL_BG).pack(side=tk.LEFT, padx=(12, 2))
+        self.registration_mode_combo = tk_option_menu(
+            opt_frame,
+            self.registration_mode_var,
+            ["严格风控模式", "常规极速模式"],
+            width=12,
+        )
+        self.registration_mode_combo.pack(side=tk.LEFT)
 
         add_label(1, 2, "代理（可选）:")
         self.proxy_var = tk.StringVar(value=config.get("proxy", ""))
@@ -3564,6 +3589,8 @@ class GrokRegisterGUI:
         # 先把当前 GUI 关键字段写回内存配置（不强制保存文件）
         try:
             config["email_provider"] = self.email_provider_var.get().strip() or "cloudflare"
+            _rmode = str(self.registration_mode_var.get()).strip()
+            config["registration_mode"] = "conventional" if ("常规" in _rmode or "conv" in _rmode.lower()) else "strict"
             config["proxy"] = self.proxy_var.get().strip()
             config["duckmail_api_key"] = self.api_key_var.get().strip()
             config["duckmail_api_base"] = self.duckmail_api_base_var.get().strip()
@@ -3679,6 +3706,8 @@ class GrokRegisterGUI:
             return
 
         config["email_provider"] = self.email_provider_var.get().strip() or "cloudflare"
+        _rmode = str(self.registration_mode_var.get()).strip()
+        config["registration_mode"] = "conventional" if ("常规" in _rmode or "conv" in _rmode.lower()) else "strict"
         config["enable_nsfw"] = bool(self.nsfw_var.get())
         config["debug_mode"] = bool(self.debug_mode_var.get())
         config["close_browser_on_stop"] = bool(self.close_browser_on_stop_var.get())
@@ -3994,7 +4023,10 @@ class GrokRegisterGUI:
                         email=email,
                         password=profile.get("password", ""),
                     )
-                    ensure_sso_oauth_eligible(sso, email=email, log_callback=wlog)
+                    if is_conventional_mode():
+                        wlog("[*] 常规极速模式：跳过机器人与风控标记检测")
+                    else:
+                        ensure_sso_oauth_eligible(sso, email=email, log_callback=wlog)
                     if config.get("enable_nsfw", True):
                         wlog("[*] 6. 开启 NSFW（失败不阻塞入库）")
                         try:
@@ -4027,11 +4059,17 @@ class GrokRegisterGUI:
                             self.results.append({"email": email, "sso": sso, "profile": profile})
                     else:
                         self.results.append({"email": email, "sso": sso, "profile": profile})
-                    cpa_ok = add_sso_to_cpa(sso, email=email, log_callback=wlog)
+                    if is_conventional_mode():
+                        cpa_ok = True
+                        wlog("[*] 常规极速模式：自动跳过 CPA 换 token 与入库，仅保存 SSO")
+                    else:
+                        cpa_ok = add_sso_to_cpa(sso, email=email, log_callback=wlog)
                     self._record_success()
                     retry_count_for_slot = 0
                     i += 1
-                    if cpa_ok:
+                    if is_conventional_mode():
+                        wlog(f"[+] 注册成功（常规极速模式）: {email}")
+                    elif cpa_ok:
                         wlog(f"[+] 注册成功: {email}")
                     else:
                         wlog(f"[+] 注册成功（SSO 已保存，CPA 入库失败）: {email}")
@@ -4168,7 +4206,7 @@ def run_registration_cli(count):
         pass
     pool = load_proxy_pool()
     cli_log(
-        f"[*] 终端模式启动，目标数量: {count} | 并发: {workers} | "
+        f"[*] 终端模式启动，目标数量: {count} | 并发: {workers} | 模式: {'常规极速模式(拿到SSO即成功)' if is_conventional_mode() else '严格风控模式'} | "
         f"代理池: {len(pool)} ({_proxy_pool_source})"
     )
     _cli_interval_raw = str(config.get("account_interval", "0") or "0").strip()
@@ -4335,11 +4373,14 @@ def run_registration_cli(count):
                             email=email,
                             password=profile.get("password", ""),
                         )
-                        ensure_sso_oauth_eligible(
-                            sso,
-                            email=email,
-                            log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
-                        )
+                        if is_conventional_mode():
+                            cli_log(f"[W{wid+1}] [*] 常规极速模式：跳过机器人与风控标记检测")
+                        else:
+                            ensure_sso_oauth_eligible(
+                                sso,
+                                email=email,
+                                log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
+                            )
                         if config.get("enable_nsfw", True):
                             enable_nsfw_for_token(
                                 sso,
@@ -4361,14 +4402,20 @@ def run_registration_cli(count):
                                 log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
                             )
                             raise RuntimeError(f"保存账号文件失败: {file_exc}") from file_exc
-                        cpa_ok = add_sso_to_cpa(
-                            sso, email=email, log_callback=lambda m: cli_log(f"[W{wid+1}] {m}")
-                        )
+                        if is_conventional_mode():
+                            cpa_ok = True
+                            cli_log(f"[W{wid+1}] [*] 常规极速模式：自动跳过 CPA 换 token 与入库，仅保存 SSO")
+                        else:
+                            cpa_ok = add_sso_to_cpa(
+                                sso, email=email, log_callback=lambda m: cli_log(f"[W{wid+1}] {m}")
+                            )
                         local_success += 1
                         mark_successful_account()
                         i += 1
                         retry = 0
-                        if cpa_ok:
+                        if is_conventional_mode():
+                            cli_log(f"[W{wid+1}] [+] 注册成功（常规极速模式）: {email}")
+                        elif cpa_ok:
                             cli_log(f"[W{wid+1}] [+] 注册成功: {email}")
                         else:
                             cli_log(f"[W{wid+1}] [+] 注册成功（SSO 已保存，CPA 入库失败）: {email}")
@@ -4376,9 +4423,9 @@ def run_registration_cli(count):
                             "ok",
                             email,
                             kind="success",
-                            detail="cpa_ok" if cpa_ok else "cpa_fail",
+                            detail="conventional" if is_conventional_mode() else ("cpa_ok" if cpa_ok else "cpa_fail"),
                             worker=f"W{wid+1}",
-                            bot_flag=0,
+                            bot_flag=None if is_conventional_mode() else 0,
                             log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
                         )
                         mark_slot_completed()
@@ -4725,7 +4772,10 @@ def run_registration_cli(count):
                     email=email,
                     password=profile.get("password", ""),
                 )
-                ensure_sso_oauth_eligible(sso, email=email, log_callback=cli_log)
+                if is_conventional_mode():
+                    cli_log("[*] 常规极速模式：跳过机器人与风控标记检测")
+                else:
+                    ensure_sso_oauth_eligible(sso, email=email, log_callback=cli_log)
                 if config.get("enable_nsfw", True):
                     cli_log("[*] 6. 开启 NSFW")
                     nsfw_ok, nsfw_msg = enable_nsfw_for_token(
@@ -4744,12 +4794,18 @@ def run_registration_cli(count):
                     cli_log(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")
                     _append_sso_pending(email, sso, log_callback=cli_log)
                     raise RuntimeError(f"保存账号文件失败: {file_exc}") from file_exc
-                cpa_ok = add_sso_to_cpa(sso, email=email, log_callback=cli_log)
+                if is_conventional_mode():
+                    cpa_ok = True
+                    cli_log("[*] 常规极速模式：自动跳过 CPA 换 token 与入库，仅保存 SSO")
+                else:
+                    cpa_ok = add_sso_to_cpa(sso, email=email, log_callback=cli_log)
                 success_count += 1
                 mark_successful_account()
                 retry_count_for_slot = 0
                 i += 1
-                if cpa_ok:
+                if is_conventional_mode():
+                    cli_log(f"[+] 注册成功（常规极速模式）: {email}")
+                elif cpa_ok:
                     cli_log(f"[+] 注册成功: {email}")
                 else:
                     cli_log(f"[+] 注册成功（SSO 已保存，CPA 入库失败）: {email}")
@@ -4757,9 +4813,9 @@ def run_registration_cli(count):
                     "ok",
                     email,
                     kind="success",
-                    detail="cpa_ok" if cpa_ok else "cpa_fail",
+                    detail="conventional" if is_conventional_mode() else ("cpa_ok" if cpa_ok else "cpa_fail"),
                     worker="W1",
-                    bot_flag=0,
+                    bot_flag=None if is_conventional_mode() else 0,
                     log_callback=cli_log,
                 )
                 if success_count % 2 == 0:

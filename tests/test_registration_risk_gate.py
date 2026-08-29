@@ -130,8 +130,34 @@ def test_unknown_state_continues_without_quarantine():
     assert quarantined == []
 
 
+def test_conventional_mode_helpers():
+    previous_mode = register.config.get("registration_mode")
+    try:
+        register.config["registration_mode"] = "conventional"
+        assert register.get_registration_mode() == "conventional"
+        assert register.is_conventional_mode() is True
+
+        register.config["registration_mode"] = "常规极速模式"
+        assert register.get_registration_mode() == "conventional"
+        assert register.is_conventional_mode() is True
+
+        register.config["registration_mode"] = "strict"
+        assert register.get_registration_mode() == "strict"
+        assert register.is_conventional_mode() is False
+
+        register.config["registration_mode"] = ""
+        assert register.get_registration_mode() == "strict"
+        assert register.is_conventional_mode() is False
+    finally:
+        if previous_mode is None:
+            register.config.pop("registration_mode", None)
+        else:
+            register.config["registration_mode"] = previous_mode
+
+
 if __name__ == "__main__":
     test_registration_risk_policy()
     test_risk_gate_runs_when_cpa_auto_add_is_disabled()
     test_unknown_state_continues_without_quarantine()
+    test_conventional_mode_helpers()
     print("OK registration risk gate")
