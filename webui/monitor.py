@@ -224,6 +224,16 @@ def load_control() -> dict:
         c.setdefault("batch_count", 40)
         c.setdefault("add_count", 40)  # 再跑 N 个
         c.setdefault("mode", "orch")  # orch | batch
+        reg_mode = "strict"
+        cfg_path = ROOT / "config.json"
+        if cfg_path.is_file():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if cfg.get("registration_mode"):
+                    reg_mode = cfg["registration_mode"]
+            except Exception:
+                pass
+        c.setdefault("registration_mode", reg_mode)
         return c
 
 
@@ -236,6 +246,7 @@ def save_control(updates: dict) -> dict:
         "mode",
         "base_cpa",
         "target_cpa",
+        "registration_mode",
     }
     with CONTROL_LOCK:
         c = load_control()
@@ -257,6 +268,17 @@ def save_control(updates: dict) -> dict:
         except Exception:
             c["add_count"] = 40
         c["mode"] = c.get("mode") if c.get("mode") in ("orch", "batch") else "orch"
+        if "registration_mode" in c:
+            rm = str(c["registration_mode"]).strip().lower()
+            c["registration_mode"] = "conventional" if ("conv" in rm or "常规" in rm) else "strict"
+            cfg_path = ROOT / "config.json"
+            if cfg_path.is_file():
+                try:
+                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                    cfg["registration_mode"] = c["registration_mode"]
+                    _write_json(cfg_path, cfg)
+                except Exception:
+                    pass
         for key in ("base_cpa", "target_cpa"):
             if c.get(key) is None or str(c.get(key)).strip() == "":
                 c.pop(key, None)
@@ -1140,7 +1162,7 @@ HTML = r"""<!DOCTYPE html>
   .list-pager button:disabled { opacity: .4; cursor: not-allowed; }
   .control-grid {
     display: grid;
-    grid-template-columns: minmax(220px, 1.6fr) minmax(150px, .9fr) repeat(4, minmax(100px, .55fr)) minmax(258px, auto);
+    grid-template-columns: minmax(180px, 1.3fr) minmax(110px, .75fr) minmax(130px, .85fr) repeat(4, minmax(70px, .45fr)) minmax(258px, auto);
     gap: 12px;
     align-items: end;
   }
@@ -2021,6 +2043,13 @@ HTML = r"""<!DOCTYPE html>
         <select id="mode">
           <option value="orch">持续编排</option>
           <option value="batch">单批运行</option>
+        </select>
+      </div>
+      <div class="field field-reg-mode">
+        <label for="registration_mode">注册策略</label>
+        <select id="registration_mode">
+          <option value="strict">严格风控模式</option>
+          <option value="conventional">常规极速模式</option>
         </select>
       </div>
       <div class="field"><label for="workers-input">并发数</label>
@@ -3220,12 +3249,13 @@ async function refresh() {
 }
 function fillControl(d) {
   const c = d.control || {};
-  if (document.activeElement && ["workers-input","batch_count","add_count","risk_pause","mode"].includes(document.activeElement.id)) return;
+  if (document.activeElement && ["workers-input","batch_count","add_count","risk_pause","mode","registration_mode"].includes(document.activeElement.id)) return;
   if (c.workers != null) document.getElementById("workers-input").value = c.workers;
   if (c.batch_count != null) document.getElementById("batch_count").value = c.batch_count;
   if (c.add_count != null && document.getElementById("add_count")) document.getElementById("add_count").value = c.add_count;
   if (c.risk_pause != null) document.getElementById("risk_pause").value = c.risk_pause;
   if (c.mode) document.getElementById("mode").value = c.mode;
+  if (c.registration_mode && document.getElementById("registration_mode")) document.getElementById("registration_mode").value = c.registration_mode;
 }
 function controlBody() {
   return {
@@ -3234,6 +3264,7 @@ function controlBody() {
     add_count: Number((document.getElementById("add_count") || {}).value || 40),
     risk_pause: Number(document.getElementById("risk_pause").value || 10),
     mode: document.getElementById("mode").value || "orch",
+    registration_mode: document.getElementById("registration_mode") ? document.getElementById("registration_mode").value : "strict",
   };
 }
 async function saveCtrl() {
