@@ -153,6 +153,30 @@ def accounts_side_file(name):
     return os.path.join(ACCOUNTS_DIR, name)
 
 
+def extract_jwt_token(sso_str: str) -> str:
+    """提取纯 JWT Token 字符串（剥离 sso= 或 sso-rw= 前缀及分号）。"""
+    s = str(sso_str or "").strip()
+    if not s:
+        return ""
+    if ";" in s:
+        for part in s.split(";"):
+            part = part.strip()
+            if part.startswith("sso-rw="):
+                return part[len("sso-rw=") :].strip()
+            if part.startswith("sso="):
+                return part[len("sso=") :].strip()
+            if part.startswith("eyJ"):
+                return part.strip()
+    if s.startswith("sso-rw="):
+        return s[len("sso-rw=") :].strip()
+    if s.startswith("sso="):
+        return s[len("sso=") :].strip()
+    match = re.search(r"\b(eyJ[A-Za-z0-9_\-\.]+)", s)
+    if match:
+        return match.group(1).strip()
+    return s
+
+
 def initialize_session_log(log_dir=None, now=None):
     """为本次程序启动创建一个独立的 UTF-8 日志文件。"""
     global _session_log_path
@@ -4044,14 +4068,19 @@ class GrokRegisterGUI:
                             wlog(f"[!] NSFW 步骤异常，已跳过: {nsfw_exc}")
                     try:
                         line = f"{email}----{profile.get('password','')}----{sso}\n"
+                        jwt_line = f"{extract_jwt_token(sso)}\n"
                         # 以邮箱命名单独保存
                         email_file = account_file_for_email(email)
                         alock = getattr(self, "_accounts_lock", None)
                         if alock:
                             with alock:
                                 atomic_write_text(email_file, line)
+                                append_private_text(accounts_side_file("accounts.txt"), line)
+                                append_private_text(accounts_side_file("sso.txt"), jwt_line)
                         else:
                             atomic_write_text(email_file, line)
+                            append_private_text(accounts_side_file("accounts.txt"), line)
+                            append_private_text(accounts_side_file("sso.txt"), jwt_line)
                     except Exception as file_exc:
                         wlog(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")
                         _append_sso_pending(email, sso, log_callback=wlog)
@@ -4390,11 +4419,14 @@ def run_registration_cli(count):
                                 log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
                             )
                         line = f"{email}----{profile.get('password','')}----{sso}\n"
+                        jwt_line = f"{extract_jwt_token(sso)}\n"
                         try:
                             with accounts_lock:
                                 # 以邮箱命名单独保存
                                 email_file = account_file_for_email(email)
                                 atomic_write_text(email_file, line)
+                                append_private_text(accounts_side_file("accounts.txt"), line)
+                                append_private_text(accounts_side_file("sso.txt"), jwt_line)
                         except Exception as file_exc:
                             cli_log(
                                 f"[W{wid+1}] [!] 保存账号文件失败，当前账号不计为成功: {file_exc}"
@@ -4790,9 +4822,12 @@ def run_registration_cli(count):
                         cli_log(f"[!] NSFW 未开启，继续保存账号: {nsfw_msg}")
                 try:
                     line = f"{email}----{profile.get('password','')}----{sso}\n"
+                    jwt_line = f"{extract_jwt_token(sso)}\n"
                     # 以邮箱命名单独保存
                     email_file = account_file_for_email(email)
                     atomic_write_text(email_file, line)
+                    append_private_text(accounts_side_file("accounts.txt"), line)
+                    append_private_text(accounts_side_file("sso.txt"), jwt_line)
                 except Exception as file_exc:
                     cli_log(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")
                     _append_sso_pending(email, sso, log_callback=cli_log)
