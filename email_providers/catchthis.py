@@ -209,7 +209,7 @@ def list_messages(
     address: str,
     api_key: str,
 ) -> List[dict]:
-    """获取指定收件箱的邮件列表。"""
+    """获取指定收件箱的邮件列表（优先 /inboxes/{addr}/emails，兼容 /inboxes/{addr}/messages）。"""
     base = normalize_base(base_url)
     key = str(api_key or "").strip()
     addr = str(address or "").strip().lower()
@@ -217,21 +217,32 @@ def list_messages(
         return []
 
     encoded_addr = quote(addr, safe="")
-    resp = http_get(
-        _api(base, f"/inboxes/{encoded_addr}/messages"),
-        headers=_headers(key),
-        timeout=API_TIMEOUT,
-        proxies={},
-    )
-    _raise_http(resp, "获取邮件列表")
-    data = _unwrap_payload(_parse_json(resp, "获取邮件列表"), "获取邮件列表")
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
-    if isinstance(data, dict):
-        for k in ("messages", "list", "emails", "data", "results"):
-            val = data.get(k)
-            if isinstance(val, list):
-                return [item for item in val if isinstance(item, dict)]
+    last_exc = None
+    # 优先使用官方标准 /inboxes/{addr}/emails 接口
+    for ep in (f"/inboxes/{encoded_addr}/emails", f"/inboxes/{encoded_addr}/messages"):
+        try:
+            resp = http_get(
+                _api(base, ep),
+                params={"format": "metadata", "order": "desc"} if ep.endswith("/emails") else {},
+                headers=_headers(key),
+                timeout=API_TIMEOUT,
+                proxies={},
+            )
+            _raise_http(resp, "获取邮件列表")
+            data = _unwrap_payload(_parse_json(resp, "获取邮件列表"), "获取邮件列表")
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+            if isinstance(data, dict):
+                for k in ("messages", "list", "emails", "data", "results"):
+                    val = data.get(k)
+                    if isinstance(val, list):
+                        return [item for item in val if isinstance(item, dict)]
+            return []
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc:
+        raise last_exc
     return []
 
 
@@ -240,32 +251,53 @@ def get_message_detail(
     base_url: str,
     message_id: str,
     api_key: str,
+    address: str = "",
 ) -> dict:
-    """获取邮件详情。"""
+    """获取邮件详情（优先 /inboxes/{addr}/emails/{id}，兼容 /messages/{id}）。"""
     base = normalize_base(base_url)
     key = str(api_key or "").strip()
     mid = str(message_id or "").strip()
+    addr = str(address or "").strip().lower()
     if not base or not key or not mid:
         return {}
 
     encoded_id = quote(mid, safe="")
-    resp = http_get(
-        _api(base, f"/messages/{encoded_id}"),
-        headers=_headers(key),
-        timeout=API_TIMEOUT,
-        proxies={},
-    )
-    _raise_http(resp, "获取邮件详情")
-    data = _unwrap_payload(_parse_json(resp, "获取邮件详情"), "获取邮件详情")
-    if isinstance(data, list):
-        data = data[0] if data else {}
-    return data if isinstance(data, dict) else {}
+    encoded_addr = quote(addr, safe="") if addr else ""
+    endpoints = []
+    if encoded_addr:
+        endpoints.append(f"/inboxes/{encoded_addr}/emails/{encoded_id}")
+    endpoints.append(f"/messages/{encoded_id}")
+
+    last_exc = None
+    for ep in endpoints:
+        try:
+            resp = http_get(
+                _api(base, ep),
+                headers=_headers(key),
+                timeout=API_TIMEOUT,
+                proxies={},
+            )
+            _raise_http(resp, "获取邮件详情")
+            data = _unwrap_payload(_parse_json(resp, "获取邮件详情"), "获取邮件详情")
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            if isinstance(data, dict):
+                msg = data.get("message")
+                if isinstance(msg, dict):
+                    return msg
+                return data
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc:
+        raise last_exc
+    return {}
 
 
 def _message_text(detail: dict, subject: str = "") -> Tuple[str, str]:
     parts: List[str] = []
     subj = str(subject or detail.get("subject") or "")
-    for field in ("text", "html", "body", "content", "raw", "message"):
+    for field in ("text", "textContent", "text_content", "body", "content", "raw", "message", "snippet", "intro"):
         value = detail.get(field)
         if isinstance(value, str) and value.strip():
             parts.append(re.sub(r"<[^>]+>", " ", value))
@@ -274,6 +306,9 @@ def _message_text(detail: dict, subject: str = "") -> Tuple[str, str]:
                 subval = value.get(subfield)
                 if isinstance(subval, str) and subval.strip():
                     parts.append(re.sub(r"<[^>]+>", " ", subval))
+    html_val = detail.get("html") or detail.get("htmlContent") or detail.get("html_content")
+    if isinstance(html_val, str) and html_val.strip():
+        parts.append(re.sub(r"<[^>]+>", " ", html_val))
     return subj, "\n".join(parts)
 
 
@@ -359,7 +394,7 @@ def wait_for_code(
             detail = msg
             if "body" not in msg and "text" not in msg and "html" not in msg and msg_id:
                 try:
-                    detail = get_message_detail(http_get, base, msg_id, key)
+                    detail = get_message_detail(http_get, base, msg_id, key, address=addr)
                 except Exception as exc:
                     if log_callback:
                         log_callback(f"[Debug] CatchThis 获取邮件详情失败: {exc}")
