@@ -544,7 +544,10 @@ def parse_account_interval() -> float:
     "0" / "" → 0（不等待）
     "30" → 30.0（固定 30 秒）
     "60-120" → 60~120 之间的随机值
+    常规极速模式（conventional）：默认不等待（0 秒），实现无缝连贯极速注册。
     """
+    if is_conventional_mode():
+        return 0.0
     raw = str(config.get("account_interval", "0") or "0").strip()
     if not raw or raw == "0":
         return 0.0
@@ -3871,7 +3874,7 @@ class GrokRegisterGUI:
         except Exception as exc:
             self.log(f"[!] 连通性检查异常: {redact_sensitive_log_line(str(exc))}")
         _interval_raw = str(config.get("account_interval", "0") or "0").strip()
-        _interval_info = f" | 账号间隔: {_interval_raw}s" if _interval_raw and _interval_raw != "0" else ""
+        _interval_info = f" | 账号间隔: {_interval_raw}s" if (_interval_raw and _interval_raw != "0" and not is_conventional_mode()) else ""
         self.log(
             f"[*] 配置已保存，开始执行。目标数量: {count} | 并发: {workers}{_interval_info}"
             + (" | 调试模式" if config.get("debug_mode") else "")
@@ -4210,7 +4213,7 @@ def run_registration_cli(count):
         f"代理池: {len(pool)} ({_proxy_pool_source})"
     )
     _cli_interval_raw = str(config.get("account_interval", "0") or "0").strip()
-    if _cli_interval_raw and _cli_interval_raw != "0":
+    if _cli_interval_raw and _cli_interval_raw != "0" and not is_conventional_mode():
         cli_log(f"[*] 账号间注册间隔: {_cli_interval_raw}s")
     _cli_mode_map = {"device_protocol": "协议 Device Flow", "device_browser": "浏览器 Device Flow", "auth_code": "Authorization Code"}
     _cli_mode_label = _cli_mode_map.get(str(config.get("cpa_token_mode", "device_protocol")), "协议 Device Flow")
