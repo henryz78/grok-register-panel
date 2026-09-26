@@ -94,9 +94,13 @@ def _account_records() -> dict[str, str]:
     records: dict[str, str] = {}
     if not ACCOUNTS_DIR.is_dir():
         return records
-    for path in sorted(ACCOUNTS_DIR.glob("*.txt")):
-        if path.name in {"mail_credentials.txt", "sso_risk_rejected.txt", "sso_bfs_flagged.txt"}:
-            continue
+    candidates = [
+        p
+        for p in ACCOUNTS_DIR.rglob("*.txt")
+        if p.name not in {"mail_credentials.txt", "sso_risk_rejected.txt", "sso_bfs_flagged.txt"}
+    ]
+    candidates.sort(key=lambda p: (1 if p.name == "sso.txt" else 0, str(p)))
+    for path in candidates:
         for sso, email in _records_from_file(path).items():
             if sso not in records or email:
                 records[sso] = email

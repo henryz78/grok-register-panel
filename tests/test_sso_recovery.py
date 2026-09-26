@@ -133,6 +133,47 @@ def test_bfs_config_defaults_are_loaded_for_cli():
         assert args.grok2api_auth_dir == str((Path(temp) / "g2a").resolve())
 
 
+def test_task_subdirectory_account_scan():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        accounts = root / "accounts"
+        task1 = accounts / "task_20260926_100000"
+        task2 = accounts / "task_20260926_110000"
+        task1.mkdir(parents=True)
+        task2.mkdir(parents=True)
+
+        sso1 = "token_one_" + ("x" * 70)
+        sso2 = "token_two_" + ("y" * 70)
+        sso_bad = "token_bad_" + ("z" * 70)
+
+        # task1 产出 accounts.txt 和 sso.txt
+        (task1 / "accounts.txt").write_text(
+            f"user1@test.com----pass1----{sso1}\n",
+            encoding="utf-8",
+        )
+        (task1 / "sso.txt").write_text(f"{sso1}\n", encoding="utf-8")
+
+        # task2 产出 accounts.txt 和风控隔离记录
+        (task2 / "accounts.txt").write_text(
+            f"user2@test.com----pass2----{sso2}\n",
+            encoding="utf-8",
+        )
+        (task2 / "sso_risk_rejected.txt").write_text(
+            f"bad@test.com----{sso_bad}----botFlagSource=2\n",
+            encoding="utf-8",
+        )
+
+        records = load_sso_records(accounts_dir=str(accounts))
+        assert len(records) == 2
+        ssos = [r.sso for r in records]
+        assert sso1 in ssos
+        assert sso2 in ssos
+        assert sso_bad not in ssos
+        user1_rec = next(r for r in records if r.sso == sso1)
+        assert user1_rec.email == "user1@test.com"
+        assert user1_rec.password == "pass1"
+
+
 if __name__ == "__main__":
     test_parser_preserves_email_and_password()
     test_queue_dedup_and_consume()
@@ -140,4 +181,5 @@ if __name__ == "__main__":
     test_cpa_only_batch_does_not_create_auth_out()
     test_existing_cpa_email_detection()
     test_bfs_config_defaults_are_loaded_for_cli()
+    test_task_subdirectory_account_scan()
     print("OK sso recovery")

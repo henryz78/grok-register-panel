@@ -133,9 +133,12 @@ def _nonempty_line_count(path: Path) -> int:
 def _account_txt_count() -> int:
     if not ACCOUNTS_DIR.is_dir():
         return 0
+    root_acc = ACCOUNTS_DIR / "accounts.txt"
+    if root_acc.is_file():
+        return _nonempty_line_count(root_acc)
     n = 0
-    for path in ACCOUNTS_DIR.glob("*.txt"):
-        if path.name in {"mail_credentials.txt", "sso_risk_rejected.txt", "sso_bfs_flagged.txt"}:
+    for path in ACCOUNTS_DIR.rglob("*.txt"):
+        if path.name in {"mail_credentials.txt", "sso_risk_rejected.txt", "sso_bfs_flagged.txt", "sso.txt"}:
             continue
         n += _nonempty_line_count(path)
     return n

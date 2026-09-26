@@ -140,8 +140,40 @@ def new_accounts_output_path(now=None):
     return os.path.join(ACCOUNTS_DIR, f"accounts_{ts}.txt")
 
 
+_current_task_dir = None
+_current_task_lock = threading.Lock()
+
+
+def init_task_dir(task_name=None):
+    """为当前任务批次初始化独立的输出目录 accounts/task_YYYYMMDD_HHMMSS/。"""
+    global _current_task_dir
+    with _current_task_lock:
+        ensure_accounts_dir()
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = task_name or f"task_{ts}"
+        task_dir = os.path.join(ACCOUNTS_DIR, name)
+        ensure_private_dir(task_dir)
+        _current_task_dir = task_dir
+        return _current_task_dir
+
+
+def get_current_task_dir():
+    """获取当前任务的产物目录。若尚未初始化则自动初始化。"""
+    global _current_task_dir
+    with _current_task_lock:
+        if _current_task_dir and os.path.isdir(_current_task_dir):
+            return _current_task_dir
+    return init_task_dir()
+
+
+def task_side_file(name):
+    """当前任务目录下的附属文件路径。"""
+    td = get_current_task_dir()
+    return os.path.join(td, name)
+
+
 def account_file_for_email(email):
-    """单个账号的独立输出路径：accounts/{email}.txt"""
+    """单个账号的独立输出路径（保留兼容性接口）。"""
     ensure_accounts_dir()
     safe_email = str(email or "").strip().replace("/", "_").replace("\\", "_")
     return os.path.join(ACCOUNTS_DIR, f"{safe_email}.txt")
@@ -175,6 +207,39 @@ def extract_jwt_token(sso_str: str) -> str:
     if match:
         return match.group(1).strip()
     return s
+
+
+def save_account_record(email: str, password: str, sso: str, alock=None):
+    """保存注册成功的账号：同时追加写入当前任务目录和全局汇总，不再生成单个 email.txt。"""
+    line = f"{email}----{password}----{sso}\n"
+    jwt_line = f"{extract_jwt_token(sso)}\n"
+
+    task_acc = task_side_file("accounts.txt")
+    task_sso = task_side_file("sso.txt")
+    global_acc = accounts_side_file("accounts.txt")
+    global_sso = accounts_side_file("sso.txt")
+
+    if alock:
+        with alock:
+            append_private_text(task_acc, line)
+            append_private_text(task_sso, jwt_line)
+            append_private_text(global_acc, line)
+            append_private_text(global_sso, jwt_line)
+    else:
+        append_private_text(task_acc, line)
+        append_private_text(task_sso, jwt_line)
+        append_private_text(global_acc, line)
+        append_private_text(global_sso, jwt_line)
+
+
+def append_mail_credential(email: str, dev_token: str):
+    """记录临时邮箱凭证到当前任务目录与全局汇总。"""
+    line = f"{email}\t{dev_token}\n"
+    try:
+        append_private_text(task_side_file("mail_credentials.txt"), line)
+        append_private_text(accounts_side_file("mail_credentials.txt"), line)
+    except Exception:
+        pass
 
 
 def initialize_session_log(log_dir=None, now=None):
@@ -1024,50 +1089,65 @@ def _resolve_cpa_proxy():
 
 
 def _append_sso_pending(email: str, sso: str, log_callback=None):
-    """CPA 失败时保留 SSO，便于事后 sso_to_auth_json 重转。"""
+    """CPA 失败时保留 SSO，便于事后 sso_to_auth_json 重转。同时记录到当前任务与全局队列。"""
     try:
-        path = accounts_side_file("sso_pending.txt")
         line = f"{email}----{sso}\n" if email else f"{sso}\n"
-        with exclusive_file_lock(path + ".lock"):
-            duplicate = False
-            try:
-                for existing in Path(path).read_text(encoding="utf-8").splitlines():
-                    if existing.strip().split("----")[-1].removeprefix("sso=").strip() == sso:
-                        duplicate = True
-                        break
-            except OSError:
-                pass
-            if not duplicate:
-                append_private_text(path, line)
+        targets = [accounts_side_file("sso_pending.txt")]
+        try:
+            t_path = task_side_file("sso_pending.txt")
+            if t_path != targets[0]:
+                targets.append(t_path)
+        except Exception:
+            pass
+
+        for path in targets:
+            with exclusive_file_lock(path + ".lock"):
+                duplicate = False
+                try:
+                    for existing in Path(path).read_text(encoding="utf-8").splitlines():
+                        if existing.strip().split("----")[-1].removeprefix("sso=").strip() == sso:
+                            duplicate = True
+                            break
+                except OSError:
+                    pass
+                if not duplicate:
+                    append_private_text(path, line)
         if log_callback:
-            action = "已存在" if duplicate else "已追加"
-            log_callback(f"[CPA] 待重转 SSO {action} → {path}")
+            log_callback(f"[CPA] 待重转 SSO 已记录 → {targets[0]}")
     except Exception as exc:
         if log_callback:
             log_callback(f"[CPA] 写入 sso_pending 失败: {exc}")
 
 
 def _append_sso_risk_rejected(email: str, sso: str, details: str, log_callback=None):
-    """保存注册风控拒绝的 SSO；该类账号不进入待重转队列。"""
+    """保存注册风控拒绝的 SSO，同时记录到当前任务与全局名单。"""
     try:
-        path = accounts_side_file("sso_risk_rejected.txt")
         safe_details = re.sub(r"[\r\n\t]+", " ", str(details or "")).strip()
-        append_private_text(path, f"{email}----{sso}----{safe_details}\n")
+        line = f"{email}----{sso}----{safe_details}\n"
+        append_private_text(accounts_side_file("sso_risk_rejected.txt"), line)
+        try:
+            append_private_text(task_side_file("sso_risk_rejected.txt"), line)
+        except Exception:
+            pass
         if log_callback:
-            log_callback(f"[CPA] 已保存注册风控拒绝记录 → {path}")
+            log_callback(f"[CPA] 已保存注册风控拒绝记录 → {accounts_side_file('sso_risk_rejected.txt')}")
     except Exception as exc:
         if log_callback:
             log_callback(f"[CPA] 保存注册风控拒绝记录失败: {exc}")
 
 
 def _append_sso_bfs_flagged(email: str, sso: str, details: str, log_callback=None):
-    """保存 JWT bfs 标记账号（access_token/sso 含 bfs claim）。"""
+    """保存 JWT bfs 标记账号，同时记录到当前任务与全局名单。"""
     try:
-        path = accounts_side_file("sso_bfs_flagged.txt")
         safe_details = re.sub(r"[\r\n\t]+", " ", str(details or "")).strip()
-        append_private_text(path, f"{email}----{sso}----{safe_details}\n")
+        line = f"{email}----{sso}----{safe_details}\n"
+        append_private_text(accounts_side_file("sso_bfs_flagged.txt"), line)
+        try:
+            append_private_text(task_side_file("sso_bfs_flagged.txt"), line)
+        except Exception:
+            pass
         if log_callback:
-            log_callback(f"[CPA] 已保存 bfs 标记记录 → {path}")
+            log_callback(f"[CPA] 已保存 bfs 标记记录 → {accounts_side_file('sso_bfs_flagged.txt')}")
     except Exception as exc:
         if log_callback:
             log_callback(f"[CPA] 保存 bfs 标记记录失败: {exc}")
@@ -3922,6 +4002,8 @@ class GrokRegisterGUI:
         self.log("[!] 用户停止注册" + ("（将保留浏览器）" if keep else "（将关闭浏览器）"))
 
     def _run_registration_entry(self, count, workers):
+        task_dir = init_task_dir()
+        self.log(f"[*] 本次任务目录: {task_dir}")
         # 并发数不超过任务数，避免空 worker 白开浏览器
         workers = max(1, min(int(workers or 1), 24, int(count or 1)))
         # 启动前清理上次崩溃 / 强杀残留的临时 profile 目录
@@ -4009,13 +4091,7 @@ class GrokRegisterGUI:
                         )
                         wlog(f"[*] 邮箱: {email}")
                         wlog(f"[Debug] 邮箱 token 已获取 (len={len(str(dev_token or ''))})")
-                        try:
-                            append_private_text(
-                                accounts_side_file("mail_credentials.txt"),
-                                f"{email}\t{dev_token}\n",
-                            )
-                        except Exception:
-                            pass
+                        append_mail_credential(email, dev_token)
                         wlog("[*] 3. 拉取验证码")
                         try:
                             code = fill_code_and_submit(
@@ -4067,20 +4143,12 @@ class GrokRegisterGUI:
                         except Exception as nsfw_exc:
                             wlog(f"[!] NSFW 步骤异常，已跳过: {nsfw_exc}")
                     try:
-                        line = f"{email}----{profile.get('password','')}----{sso}\n"
-                        jwt_line = f"{extract_jwt_token(sso)}\n"
-                        # 以邮箱命名单独保存
-                        email_file = account_file_for_email(email)
-                        alock = getattr(self, "_accounts_lock", None)
-                        if alock:
-                            with alock:
-                                atomic_write_text(email_file, line)
-                                append_private_text(accounts_side_file("accounts.txt"), line)
-                                append_private_text(accounts_side_file("sso.txt"), jwt_line)
-                        else:
-                            atomic_write_text(email_file, line)
-                            append_private_text(accounts_side_file("accounts.txt"), line)
-                            append_private_text(accounts_side_file("sso.txt"), jwt_line)
+                        save_account_record(
+                            email,
+                            profile.get("password", ""),
+                            sso,
+                            alock=getattr(self, "_accounts_lock", None),
+                        )
                     except Exception as file_exc:
                         wlog(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")
                         _append_sso_pending(email, sso, log_callback=wlog)
@@ -4228,7 +4296,7 @@ def run_registration_cli(count):
     retry_count_for_slot = 0
     max_slot_retry = slot_retries()
     max_proxy_boot_rotations = proxy_boot_rotations()
-    accounts_output_file = ""  # 已改为按邮箱单独保存，不再使用批量文件
+    task_dir = init_task_dir()
     workers = max(1, min(int(config.get("register_workers", 1) or 1), 24, int(count or 1)))
     try:
         home = _restore_home_proxies()
@@ -4237,6 +4305,7 @@ def run_registration_cli(count):
     except Exception:
         pass
     pool = load_proxy_pool()
+    cli_log(f"[*] 本次任务目录: {task_dir}")
     cli_log(
         f"[*] 终端模式启动，目标数量: {count} | 并发: {workers} | 模式: {'常规极速模式(拿到SSO即成功)' if is_conventional_mode() else '严格风控模式'} | "
         f"代理池: {len(pool)} ({_proxy_pool_source})"
@@ -4389,6 +4458,7 @@ def run_registration_cli(count):
                             log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
                             cancel_callback=controller.should_stop,
                         )
+                        append_mail_credential(email, dev_token)
                         code = fill_code_and_submit(
                             email,
                             dev_token,
@@ -4418,15 +4488,13 @@ def run_registration_cli(count):
                                 sso,
                                 log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
                             )
-                        line = f"{email}----{profile.get('password','')}----{sso}\n"
-                        jwt_line = f"{extract_jwt_token(sso)}\n"
                         try:
-                            with accounts_lock:
-                                # 以邮箱命名单独保存
-                                email_file = account_file_for_email(email)
-                                atomic_write_text(email_file, line)
-                                append_private_text(accounts_side_file("accounts.txt"), line)
-                                append_private_text(accounts_side_file("sso.txt"), jwt_line)
+                            save_account_record(
+                                email,
+                                profile.get("password", ""),
+                                sso,
+                                alock=accounts_lock,
+                            )
                         except Exception as file_exc:
                             cli_log(
                                 f"[W{wid+1}] [!] 保存账号文件失败，当前账号不计为成功: {file_exc}"
@@ -4765,14 +4833,7 @@ def run_registration_cli(count):
                         log_callback=cli_log, cancel_callback=controller.should_stop
                     )
                     cli_log(f"[*] 邮箱: {email}")
-                    cli_log(f"[Debug] 邮箱 token 已获取 (len={len(str(dev_token or ''))})")
-                    try:
-                        append_private_text(
-                            accounts_side_file("mail_credentials.txt"),
-                            f"{email}\t{dev_token}\n",
-                        )
-                    except Exception:
-                        pass
+                    append_mail_credential(email, dev_token)
                     cli_log("[*] 3. 拉取验证码")
                     try:
                         code = fill_code_and_submit(
@@ -4821,13 +4882,12 @@ def run_registration_cli(count):
                     else:
                         cli_log(f"[!] NSFW 未开启，继续保存账号: {nsfw_msg}")
                 try:
-                    line = f"{email}----{profile.get('password','')}----{sso}\n"
-                    jwt_line = f"{extract_jwt_token(sso)}\n"
-                    # 以邮箱命名单独保存
-                    email_file = account_file_for_email(email)
-                    atomic_write_text(email_file, line)
-                    append_private_text(accounts_side_file("accounts.txt"), line)
-                    append_private_text(accounts_side_file("sso.txt"), jwt_line)
+                    save_account_record(
+                        email,
+                        profile.get("password", ""),
+                        sso,
+                        alock=None,
+                    )
                 except Exception as file_exc:
                     cli_log(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")
                     _append_sso_pending(email, sso, log_callback=cli_log)

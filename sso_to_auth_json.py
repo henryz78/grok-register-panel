@@ -2010,14 +2010,18 @@ def load_sso_records(
     if accounts_dir:
         account_root = Path(accounts_dir)
         if account_root.is_dir():
-            for candidate in sorted(account_root.glob("*.txt")):
-                if candidate.name in {
+            candidates = [
+                c
+                for c in account_root.rglob("*.txt")
+                if c.name not in {
                     "mail_credentials.txt",
                     "sso_risk_rejected.txt",
                     "sso_bfs_flagged.txt",
-                }:
-                    continue
-                paths.append(candidate)
+                }
+            ]
+            # 优先读取包含邮箱密码的 accounts.txt 等文件，纯 Token 文件的 sso.txt 排在后面
+            candidates.sort(key=lambda p: (1 if p.name == "sso.txt" else 0, str(p)))
+            paths.extend(candidates)
     for input_path in paths:
         try:
             if input_path.resolve() in locked_paths or input_path.name == "sso_pending.txt":
