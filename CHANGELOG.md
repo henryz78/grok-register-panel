@@ -2,15 +2,31 @@
 
 ## Unreleased
 
+### Changed
+
+- 降智测试只按有没有 thinking 判定：有 thinking 为正常，没有为降智。不再用 Token/s / `burst` / `soft` 分档。
+
+## 0.5.0 - 2026-09-06
+
 ### Added
 
+- Add a panel **降智测试** that batch-probes CPA / Grok2API accounts with a real streamed reply over configured 家宽 proxies. Missing thinking or inflated Token/s is degraded; 401/403 / permission-denied is risk. CLI: `scripts/check_quality.py`.
+- Optional register-time short probe via `quality_probe_on_register` (default **off**). When enabled, SSO→OAuth write stamps `quality_*` onto CPA / Grok2API auth so a later panel scan is not required for new accounts.
 - Add an `inbucket` email provider for self-hosted Inbucket instances: generate addresses under a configured receive domain and poll the v1 mailbox API for the xAI verification code. Root domains accept a comma-separated rotation list, and `inbucket_random_levels` can stack 1-3 random subdomain labels per address (wildcard MX required).
 - Treat Windows as a first-class runtime: PowerShell setup/batch/panel scripts, Playwright `node.exe` + EPIPE guard (no bash wrapper), default headless batches, and SOCKS5 `PySocks` as a direct dependency so the panel can import remote residential URLs without Linux mixed ports.
+- Add a GitHub Pages landing page and link Discussions from the README.
+
+### Changed
+
+- Stop using grok.com `botFlagSource` / `policy=deny` as a registration risk gate or operational verdict. SSO scan remains as a deprecated diagnostic only.
+- Recommend residential (家宽) exits and Outlook-class mailboxes; domain emails are no longer the suggested default.
+- 降智测试改为短题（时钟夹角 `3:27` + `QUALITY_OK`）、`max_tokens=48`，见到 thinking 约 800ms 后掐流。面板批量扫描用于存量复测。
 
 ### Fixed
 
 - Stop assigning `scripts/playwright-node` (a POSIX shell wrapper) to `PLAYWRIGHT_NODEJS_PATH` on Windows, which previously made Camoufox fail to spawn.
 - Keep POSIX `GROK_PLAYWRIGHT_NODE` on a real node binary so the wrapper cannot `exec` itself. Quote Windows `NODE_OPTIONS --require` paths that contain spaces.
+- Treat a mid-stream proxy/upstream disconnect as a transport error (or keep a partial sample) instead of crashing the quality scan.
 
 ## 0.4.4 - 2026-08-16
 

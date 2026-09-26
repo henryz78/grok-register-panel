@@ -60,6 +60,12 @@ def test_provider_schema_and_defaults():
             "catchthis",
         }
         assert providers["outlook_rt"]["configured"] is False
+        assert providers["outlook_rt"]["recommended"] is True
+        assert providers["outlook_rt"]["kind"] == "mailbox"
+        assert providers["cloudflare"]["kind"] == "domain"
+        assert providers["cloudflare"]["recommended"] is False
+        assert state["recommended_provider"] == "outlook_rt"
+        assert "域名邮箱" in (state.get("recommend_note") or "")
         assert any(
             field["name"] == "outlook_rt_inventory"
             for field in providers["outlook_rt"]["fields"]

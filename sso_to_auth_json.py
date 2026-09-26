@@ -1833,6 +1833,40 @@ def probe_cpa_record(
         return None, str(exc)[:300]
 
 
+def stamp_converted_record_quality(
+    record: dict,
+    proxy: str = "",
+    log=print,
+    **kwargs,
+) -> dict:
+    """Lazy-import the short chat probe so this module stays import-safe."""
+    try:
+        from quality_probe import stamp_quality_on_record
+    except Exception as exc:
+        log(f"  ⚠️ 降智测试模块不可用: {exc}")
+        return {}
+    try:
+        probed = stamp_quality_on_record(record, proxy=proxy, **kwargs)
+    except Exception as exc:
+        log(f"  ⚠️ 降智测试失败（仍写入 auth）: {exc}")
+        return {}
+    verdict = str(probed.get("verdict") or "error")
+    tag = {
+        "healthy": "✅",
+        "soft": "⚠️",
+        "hard": "❌",
+        "burst": "❌",
+        "risk": "⛔",
+    }.get(verdict, "⚠️")
+    log(
+        f"  {tag} 降智测试: {verdict} tps={probed.get('tps')} "
+        f"think={int(bool(probed.get('has_thinking')))} "
+        f"early={int(bool(probed.get('early_stop')))} "
+        f"status={probed.get('status_code')}"
+    )
+    return probed
+
+
 def write_cpa_auth(auth_dir: Path, record: dict) -> Path:
     """写出 CPA 可热加载的 xai-<email>.json（原子替换）。
 
@@ -1857,10 +1891,19 @@ def grok2api_auth_filename(entry: dict, email: str = "") -> str:
     return f"g2a-{safe}.json"
 
 
-def write_grok2api_auth(auth_dir: Path, token: dict, email: str = "") -> Path:
+def write_grok2api_auth(
+    auth_dir: Path,
+    token: dict,
+    email: str = "",
+    extra: dict | None = None,
+) -> Path:
     """写出 Grok2API / ~/.grok 风格 auth（issuer::client_id 嵌套）。"""
     ensure_private_dir(auth_dir)
     key, entry = token_to_auth_entry(token, email=email)
+    if isinstance(extra, dict):
+        for field, value in extra.items():
+            if str(field).startswith("quality_"):
+                entry[field] = value
     path = auth_dir / grok2api_auth_filename(entry, email=email)
     write_auth_json(path, key, entry)
     return path
@@ -2090,6 +2133,8 @@ def apply_config_defaults(args) -> None:
             args.bfs_skip_write = False
         if getattr(args, "bfs_disable", None) is None:
             args.bfs_disable = False
+        if getattr(args, "quality_probe", None) is None:
+            args.quality_probe = False
         args.prefer = args.prefer or "device"
         return
     config_path = Path(args.from_config).expanduser().resolve()
@@ -2108,6 +2153,8 @@ def apply_config_defaults(args) -> None:
         args.bfs_skip_write = _config_bool(config.get("bfs_skip_cpa"), False)
     if getattr(args, "bfs_disable", None) is None:
         args.bfs_disable = _config_bool(config.get("bfs_disable_cpa"), False)
+    if getattr(args, "quality_probe", None) is None:
+        args.quality_probe = _config_bool(config.get("quality_probe_on_register"), False)
     if not args.prefer:
         mode = str(config.get("cpa_token_mode") or "device_protocol")
         args.prefer = "auth_code" if mode == "auth_code" else "device"
@@ -2244,6 +2291,20 @@ def main() -> int:
         action="store_true",
         default=None,
         help="换 token 后若含 bfs，仍写入 CPA 但 disabled=true",
+    )
+    ap.add_argument(
+        "--quality-probe",
+        dest="quality_probe",
+        action="store_true",
+        default=None,
+        help="换 token 后立刻短测降智（默认关，需 --quality-probe 或 config 打开）",
+    )
+    ap.add_argument(
+        "--no-quality-probe",
+        dest="quality_probe",
+        action="store_false",
+        default=None,
+        help="换 token 后不测降智，只写 auth",
     )
     ap.add_argument(
         "--check-sso-state",
@@ -2467,11 +2528,8 @@ def main() -> int:
                     write_auth_json(Path(args.out), key, entry)
                     print(f"  💾 {args.out}")
 
-            if args.grok2api_auth_dir:
-                gp = write_grok2api_auth(Path(args.grok2api_auth_dir), token, email=email)
-                print(f"  💾 Grok2API → {gp}")
-
-            if args.cpa_auth_dir or args.cpa_remote_url:
+            cpa_record = None
+            if args.grok2api_auth_dir or args.cpa_auth_dir or args.cpa_remote_url:
                 cpa_record = token_to_cpa_record(
                     token,
                     email=email,
@@ -2482,6 +2540,26 @@ def main() -> int:
                 if args.bfs_disable and cpa_record.get("bfs") is True:
                     cpa_record["disabled"] = True
                     print("  ⚠️ bfs 账号已标记 disabled=true")
+                if args.quality_probe:
+                    stamp_converted_record_quality(cpa_record, proxy=args.proxy)
+
+            if args.grok2api_auth_dir:
+                extra = None
+                if isinstance(cpa_record, dict):
+                    extra = {
+                        key: cpa_record[key]
+                        for key in cpa_record
+                        if str(key).startswith("quality_")
+                    }
+                gp = write_grok2api_auth(
+                    Path(args.grok2api_auth_dir),
+                    token,
+                    email=email,
+                    extra=extra,
+                )
+                print(f"  💾 Grok2API → {gp}")
+
+            if cpa_record is not None and (args.cpa_auth_dir or args.cpa_remote_url):
                 if args.cpa_auth_dir:
                     cp = write_cpa_auth(Path(args.cpa_auth_dir), cpa_record)
                     print(f"  💾 CPA 本地 → {cp}")
