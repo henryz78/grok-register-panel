@@ -74,6 +74,7 @@ try:
         stop_quality_scan,
     )
     from webui.security_utils import (
+        DEFAULT_MONITOR_TOKEN,
         check_token_optional_read,
         expected_token,
         mask_email,
@@ -123,6 +124,7 @@ except ImportError:  # running as script from webui/
         stop_quality_scan,
     )
     from security_utils import (  # type: ignore
+        DEFAULT_MONITOR_TOKEN,
         check_token_optional_read,
         expected_token,
         mask_email,
@@ -139,7 +141,7 @@ FONT_ASSETS = {
     "/assets/geist-mono.woff2": ASSET_DIR / "geist-mono-latin-wght-normal.woff2",
 }
 MONITOR_TOKEN_ENV = "MONITOR_TOKEN"
-PANEL_INCLUDE_TAIL = os.environ.get("PANEL_INCLUDE_TAIL", "0").strip() in ("1", "true", "yes")
+PANEL_INCLUDE_TAIL = os.environ.get("PANEL_INCLUDE_TAIL", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _configured_process_roots(
@@ -434,7 +436,7 @@ def parse_log(path, max_tail=400_000):
         if RE_BFS.search(line):
             bfs_hits += 1
 
-    last_lines = lines[-40:]
+    last_lines = lines[-100:]
     if size > max_tail:
         def gcount(pat):
             r = subprocess.run(["grep", "-c", pat, str(path)], capture_output=True, text=True)
@@ -932,7 +934,7 @@ def snapshot():
         "rates": rates,
         **{k: v for k, v in parsed.items() if k != "tail"},
         "workers": workers_show,
-        "tail": (parsed.get("tail") or []) if PANEL_INCLUDE_TAIL else ["(raw log tail disabled; set PANEL_INCLUDE_TAIL=1)"],
+        "tail": (parsed.get("tail") or ["(暂无日志记录)"]) if PANEL_INCLUDE_TAIL else ["(raw log tail disabled; set PANEL_INCLUDE_TAIL=1)"],
     }
 
 
@@ -2082,7 +2084,7 @@ HTML = r"""<!DOCTYPE html>
     <div class="control-grid">
       <div class="field field-token">
         <label for="monitor-token">访问令牌</label>
-        <input id="monitor-token" type="password" autocomplete="off" placeholder="MONITOR_TOKEN" onchange="getToken(); refresh(); refreshRecovery(); refreshProxies(); refreshEmailProvider(); refreshEmailDomains(); refreshSsoState(); refreshQuality(); refreshBfs()" onblur="getToken()"/>
+        <input id="monitor-token" type="password" autocomplete="off" placeholder="默认密码: grok123456" value="grok123456" onchange="getToken(); refresh(); refreshRecovery(); refreshProxies(); refreshEmailProvider(); refreshEmailDomains(); refreshSsoState(); refreshQuality(); refreshBfs()" onblur="getToken()"/>
       </div>
       <div class="field field-mode">
         <label for="mode">运行模式</label>
@@ -2164,7 +2166,7 @@ HTML = r"""<!DOCTYPE html>
         <div class="faq-grid" id="faq-grid">
           <details class="faq-item" data-faq-item data-search="令牌 token unauthorized 401 保存设置 启动">
             <summary>提示访问令牌不匹配或 401</summary>
-            <div class="faq-answer">重新输入当前面板令牌并保存。令牌只保存在当前浏览器的 localStorage 中，换端口、设备或浏览器后需要重新输入。</div>
+            <div class="faq-answer">系统默认密码为 <code>grok123456</code>，直接运行即可自动认证；若配置了自定义 <code>MONITOR_TOKEN</code> 环境变量，请在上方“访问令牌”输入框填入相同密码并保存。</div>
           </details>
           <details class="faq-item" data-faq-item data-search="启动 立即结束 目标 cpa add_count 追加目标">
             <summary>点击启动后立即结束</summary>
@@ -2713,7 +2715,13 @@ HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <section class="card panel">
-    <div class="section-head"><h2>日志尾部</h2></div>
+    <div class="section-head">
+      <h2>日志尾部</h2>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="tail-copy-msg" style="font-size:12px;color:var(--ok);display:none;">已复制到剪贴板</span>
+        <button type="button" id="btn-copy-tail" onclick="copyTailLog()" style="padding:4px 12px;font-size:12px;cursor:pointer;">复制日志</button>
+      </div>
+    </div>
     <div class="tail mono" id="tail"></div>
   </section>
   <footer id="footer"></footer>
@@ -2953,15 +2961,68 @@ function setMsg(id, text, cls) {
 function getToken() {
   const el = document.getElementById("monitor-token");
   const fromInput = el ? (el.value || "").trim() : "";
-  const tok = (fromInput || window.MONITOR_TOKEN || localStorage.getItem("MONITOR_TOKEN") || "").trim();
+  const stored = (localStorage.getItem("MONITOR_TOKEN") || "").trim();
+  const tok = (fromInput || window.MONITOR_TOKEN || stored || "grok123456").trim();
   if (fromInput) try { localStorage.setItem("MONITOR_TOKEN", fromInput); } catch (e) {}
   return tok;
 }
 function loadTokenField() {
   const el = document.getElementById("monitor-token");
   if (!el) return;
-  if (!el.value) {
-    try { el.value = localStorage.getItem("MONITOR_TOKEN") || window.MONITOR_TOKEN || ""; } catch (e) {}
+  const stored = (localStorage.getItem("MONITOR_TOKEN") || "").trim();
+  el.value = stored || window.MONITOR_TOKEN || "grok123456";
+}
+function copyTailLog() {
+  const el = document.getElementById("tail");
+  const text = el ? (el.textContent || "") : "";
+  if (!text.trim() || text.trim() === "(暂无日志记录)") {
+    alert("当前没有可复制的日志");
+    return;
+  }
+  const btn = document.getElementById("btn-copy-tail");
+  const msgEl = document.getElementById("tail-copy-msg");
+  function showSuccess() {
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = "已复制 √";
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.disabled = false;
+      }, 2000);
+    }
+    if (msgEl) {
+      msgEl.style.display = "inline";
+      setTimeout(() => {
+        msgEl.style.display = "none";
+      }, 2000);
+    }
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(showSuccess).catch(() => fallbackCopy(text, showSuccess));
+  } else {
+    fallbackCopy(text, showSuccess);
+  }
+}
+function fallbackCopy(text, onSuccess) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok && onSuccess) {
+      onSuccess();
+    } else if (!ok) {
+      alert("复制失败，请手动选中文本复制");
+    }
+  } catch (err) {
+    alert("复制失败: " + err);
   }
 }
 async function api(path, opts) {
@@ -4041,7 +4102,12 @@ function render(d) {
   // 新数据到来时，若当前页越界则收回最后一页；用户正在翻页时尽量保留页码
   renderOkPage();
   renderFailPage();
-  document.getElementById("tail").textContent = (d.tail || []).join("\n");
+  const tailEl = document.getElementById("tail");
+  const isNearBottom = tailEl.scrollHeight - tailEl.scrollTop <= tailEl.clientHeight + 60;
+  tailEl.textContent = (d.tail && d.tail.length) ? d.tail.join("\n") : "(暂无日志记录)";
+  if (isNearBottom) {
+    tailEl.scrollTop = tailEl.scrollHeight;
+  }
   document.getElementById("footer").textContent =
     "服务 " + location.host + " / 日志 " + (d.log || "") + " / 2 秒轮询 / "
     + (d.log_size ? (d.log_size / 1024).toFixed(0) + " KB" : "0 KB")
@@ -4242,7 +4308,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
+            tok = expected_token()
+            page = HTML.replace(
+                "<script>",
+                f'<script>\n  window.MONITOR_TOKEN = window.MONITOR_TOKEN || "{tok}";\n',
+                1,
+            )
+            self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             return
         if u.path in FONT_ASSETS:
             path = FONT_ASSETS[u.path]
@@ -4619,7 +4691,7 @@ def main():
         loopback = ipaddress.ip_address(host).is_loopback
     except ValueError:
         loopback = host.strip().lower() == "localhost"
-    if not tok and not loopback:
+    if not os.environ.get("MONITOR_TOKEN") and not loopback:
         raise SystemExit(
             "MONITOR_TOKEN is required when MONITOR_HOST is not loopback"
         )
@@ -4631,12 +4703,7 @@ def main():
             f"cannot bind {BIND_HOST}:{BIND_PORT} ({e1}); "
             "set MONITOR_HOST/MONITOR_PORT (no 0.0.0.0 fallback)"
         )
-    if not tok:
-        print(
-            "[monitor] WARNING: MONITOR_TOKEN unset — write APIs (start/stop/control) will return 401",
-            flush=True,
-        )
-    print(f"[monitor] http://{host}:{BIND_PORT}/  (bound {host}:{BIND_PORT})", flush=True)
+    print(f"[monitor] http://{host}:{BIND_PORT}/  (默认密码: {tok})", flush=True)
     httpd.serve_forever()
 
 

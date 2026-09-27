@@ -55,21 +55,23 @@ def extract_bearer(auth_header: Optional[str]) -> str:
     return h
 
 
+DEFAULT_MONITOR_TOKEN = "grok123456"
+
+
 def token_required() -> bool:
-    """If MONITOR_TOKEN is set (non-empty), auth is required."""
-    return bool(str(os.environ.get("MONITOR_TOKEN", "") or "").strip())
+    """If MONITOR_TOKEN is set or default is active, auth is required."""
+    return bool(expected_token())
 
 
 def expected_token() -> str:
-    return str(os.environ.get("MONITOR_TOKEN", "") or "").strip()
+    return str(os.environ.get("MONITOR_TOKEN", "") or "").strip() or DEFAULT_MONITOR_TOKEN
 
 
 def check_token(provided: Optional[str]) -> bool:
     """Return True if request is authorized.
 
-    - If MONITOR_TOKEN unset/empty: deny mutations (fail closed for write APIs).
-      Callers may treat read-only differently.
-    - If set: constant-time-ish equality of bearer token.
+    - If MONITOR_TOKEN unset/empty: uses DEFAULT_MONITOR_TOKEN.
+    - Constant-time equality of bearer token.
     """
     exp = expected_token()
     if not exp:
@@ -78,8 +80,8 @@ def check_token(provided: Optional[str]) -> bool:
 
 
 def check_token_optional_read(provided: Optional[str], *, write: bool) -> bool:
-    """Read: allow if no token configured OR token matches.
-    Write: require configured token AND match.
+    """Read: allow if no explicit token configured OR token matches.
+    Write: require configured token (or default) AND match.
     """
     exp = expected_token()
     if write:
@@ -87,8 +89,9 @@ def check_token_optional_read(provided: Optional[str], *, write: bool) -> bool:
             return False
         return check_token(provided)
     # read
-    if not exp:
-        return True
+    if not os.environ.get("MONITOR_TOKEN", "").strip():
+        if not provided or check_token(provided):
+            return True
     return check_token(provided)
 
 
