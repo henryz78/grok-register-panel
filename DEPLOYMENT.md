@@ -6,8 +6,11 @@
 ## 1. 安装
 
 ```bash
-git clone https://github.com/lij768423-svg/grok-register-panel.git
+git clone https://github.com/henryz78/grok-register-panel.git
 cd grok-register-panel
+
+# Linux 无桌面环境（无 DISPLAY）请先安装 xvfb 虚拟显示支持：
+sudo apt update && sudo apt install -y xvfb   # Debian / Ubuntu (CentOS: yum install -y xorg-x11-server-Xvfb)
 
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip

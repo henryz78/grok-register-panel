@@ -228,9 +228,10 @@
 
       <section class="shell install" id="install">
         <h2>装起来</h2>
-        <p class="install-note">Python 3.10+。pip 只装依赖，必须再跑 camoufox fetch 才能启动浏览器。</p>
-        <pre id="install-block">git clone https://github.com/lij768423-svg/grok-register-panel.git
+        <p class="install-note">Python 3.10+。pip 只装依赖，必须跑 camoufox fetch 下载浏览器引擎；Linux 无头服务器需安装 xvfb。</p>
+        <pre id="install-block">git clone https://github.com/henryz78/grok-register-panel.git
 cd grok-register-panel
+sudo apt update && sudo apt install -y xvfb  # Linux VPS 虚拟显示 (CentOS: yum install -y xorg-x11-server-Xvfb)
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python -m camoufox fetch</pre>

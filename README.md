@@ -110,8 +110,11 @@ Linux 容器必须保留 procfs（通常为默认的 `/proc` 挂载），面板�
 ### 安装
 
 ```bash
-git clone https://github.com/lij768423-svg/grok-register-panel.git
+git clone https://github.com/henryz78/grok-register-panel.git
 cd grok-register-panel
+
+# Linux 无头服务器（VPS / SSH 终端）先安装虚拟显示支持：
+sudo apt update && sudo apt install -y xvfb   # Debian / Ubuntu (CentOS: yum install -y xorg-x11-server-Xvfb)
 
 python3 -m venv .venv
 source .venv/bin/activate          # Linux / macOS
@@ -509,11 +512,18 @@ PYTHON_BIN=.venv/bin/python scripts/run_tests.sh
 
 ## 常见问题
 
-**Q: 点启动报 `unauthorized: set MONITOR_TOKEN...`？**  
-A: 服务端已启用写接口鉴权。启动 monitor 时 `export MONITOR_TOKEN=...`，浏览器 **面板 Token** 填同一串（或 `localStorage.setItem`）。硬刷新后再点启动。
+**Q: Linux 报 `找不到 xvfb-run`，安装了有什么用？能看见浏览器界面吗？**  
+A:
+1. **作用**：Linux 无头服务器（VPS / 终端）没有连接物理显示器，浏览器无法进行真实的 DOM 布局和渲染。`xvfb` 会在内存中创建“虚拟桌面”，让浏览器可以正常加载网页、模拟真实分辨率、执行抗指纹脚本以及通过 Cloudflare Turnstile 验证码；**不安装会导致浏览器启动时直接崩溃**。
+2. **能否看见界面**：`xvfb` 的本质是虚拟帧缓冲（将画面渲染到内存缓冲，而不是物理屏幕），因此通过普通 SSH 终端无法直接看到图形窗口（这也符合服务器后台多并发静默跑批的需求）。若想直观查看浏览器操作：
+   - **方式一（最简单）**：直接在 Windows 本机运行，默认或配置 `GROK_HEADED=1` 即可直接弹出浏览器窗口。
+   - **方式二（Linux 远程桌面）**：配置 SSH X11 转发（`ssh -X`）或在 VPS 上安装 VNC 远程桌面服务。
+
+**Q: 访问令牌 / 密码是什么？**  
+A: 系统内置默认密码 `grok123456`，启动 WebUI 后浏览器自动填入并完成认证，直接运行即可。如需自定义，在启动前配置环境变量 `export MONITOR_TOKEN=你的密码` 并在页面输入框保存。
 
 **Q: 日志尾部显示 `raw log tail disabled`？**  
-A: 默认关闭防泄密。需要时 `export PANEL_INCLUDE_TAIL=1` 后重启 `monitor.py`。
+A: 新版已默认开启日志流输出。若需临时关闭可设置 `export PANEL_INCLUDE_TAIL=0`。
 
 **Q: 点启动立刻结束？**  
 A: CPA 已达旧目标。面板填大 **再跑 N 个** 再启动；编排器用 `add_count` 抬目标。
