@@ -2501,6 +2501,11 @@ HTML = r"""<!DOCTYPE html>
             <button type="button" id="quality-src-cpa" aria-pressed="true" onclick="setQualitySource('cpa')">CPA auth</button>
             <button type="button" id="quality-src-g2a" aria-pressed="false" onclick="setQualitySource('g2a')">Grok2API</button>
             <button type="button" id="quality-src-all" aria-pressed="false" onclick="setQualitySource('all')">全部 auth</button>
+            <button type="button" id="quality-src-paste" aria-pressed="false" onclick="setQualitySource('paste')">手动粘贴</button>
+          </div>
+          <div class="field" id="quality-paste-field" style="display:none;margin-top:10px;">
+            <label for="quality-input">粘贴账号信息（支持单个/批量 JSON、accounts 格式、或每行一个 Token）</label>
+            <textarea id="quality-input" rows="5" spellcheck="false" autocomplete="off" placeholder='支持直接粘贴：&#10;1. JSON 格式（单账号或 {"accounts": [{"access_token": "..."}]}）&#10;2. 每行一个 access_token (eyJ...) 或 email----token'></textarea>
           </div>
           <div class="sso-settings" style="margin-top:10px">
             <div class="field">
@@ -3781,18 +3786,23 @@ async function exportSsoState(kind) {
   } catch (e) { setMsg("sso-msg", String(e.message || e), "err"); }
 }
 function setQualitySource(source) {
-  if (!["cpa", "g2a", "all"].includes(source)) return;
+  if (!["cpa", "g2a", "all", "paste"].includes(source)) return;
   qualitySource = source;
-  ["cpa", "g2a", "all"].forEach(name => {
+  ["cpa", "g2a", "all", "paste"].forEach(name => {
     const btn = document.getElementById("quality-src-" + name);
     if (btn) btn.setAttribute("aria-pressed", String(name === source));
   });
+  const pasteField = document.getElementById("quality-paste-field");
+  if (pasteField) {
+    pasteField.style.display = source === "paste" ? "block" : "none";
+  }
   const hint = document.getElementById("quality-source-hint");
   const counts = (lastQualityState && lastQualityState.sources) || {};
   const labels = {
     cpa: "扫描 cpa_auth（" + (counts.cpa ?? 0) + "）。请求走家宽，让账号真正生成一段回复后再判定。",
     g2a: "扫描 grok2api_auth（" + (counts.g2a ?? 0) + "）。",
     all: "扫描 CPA + Grok2API auth（" + (counts.all ?? 0) + "）。",
+    paste: "手动粘贴模式：在上方文本框粘贴单个/批量 JSON、accounts 格式、或每行一个 Token，即可直接测试。",
   };
   if (hint) hint.textContent = labels[source] || labels.cpa;
 }
@@ -3883,6 +3893,7 @@ async function startQualityScan() {
   try {
     const payload = {
       source: qualitySource,
+      raw_input: (document.getElementById("quality-input") || {}).value || "",
       workers: Number((document.getElementById("quality-workers") || {}).value || 2),
       delay: Number((document.getElementById("quality-delay") || {}).value || 0.2),
       proxy: (document.getElementById("quality-proxy") || {}).value || "",
@@ -4500,6 +4511,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 result = start_quality_scan(
                     source=str((body or {}).get("source") or "cpa"),
+                    raw_input=str((body or {}).get("raw_input") or ""),
                     proxy=str((body or {}).get("proxy") or ""),
                     prefer_home=bool((body or {}).get("prefer_home", True)),
                     workers=(body or {}).get("workers", 2),

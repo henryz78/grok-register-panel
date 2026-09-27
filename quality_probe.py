@@ -469,6 +469,123 @@ def stamp_quality_on_record(
     return probed
 
 
+def extract_auth_records_from_data(data: object, path_name: str = "") -> list[dict]:
+    """Extract individual auth account dicts from a parsed JSON data structure.
+
+    Supports:
+    - Single dict: {"access_token": "...", "email": "..."}
+    - Dict with accounts list: {"accounts": [{"access_token": "...", ...}]}
+    - Top-level list of dicts: [{"access_token": "..."}, ...]
+    - Grok2API nested dict: {"issuer::client_id": {"access_token": "..."}}
+    """
+    results: list[dict] = []
+    if isinstance(data, list):
+        for entry in data:
+            if isinstance(entry, dict):
+                results.extend(extract_auth_records_from_data(entry, path_name))
+        return results
+
+    if not isinstance(data, dict):
+        return []
+
+    # Case 1: Dict with accounts array (e.g. {"accounts": [...]})
+    if isinstance(data.get("accounts"), list):
+        for entry in data["accounts"]:
+            if isinstance(entry, dict):
+                results.extend(extract_auth_records_from_data(entry, path_name))
+        if results:
+            return results
+
+    # Case 2: Dict has access_token or key directly
+    access = str(data.get("access_token") or data.get("key") or "").strip()
+    if access:
+        item = dict(data)
+        if path_name:
+            item["_path"] = path_name
+            item["_file"] = Path(path_name).name
+        email = str(item.get("email") or item.get("name") or "").strip()
+        if email and not item.get("email"):
+            item["email"] = email
+        results.append(item)
+        return results
+
+    # Case 3: Grok2API nested issuer::client_id mapping
+    for value in data.values():
+        if isinstance(value, dict) and (value.get("access_token") or value.get("key")):
+            results.extend(extract_auth_records_from_data(value, path_name))
+
+    return results
+
+
+def parse_pasted_quality_records(text: str) -> list[dict]:
+    """Parse pasted text into a list of account records.
+
+    Accepts:
+    - Full JSON (e.g. {"accounts": [...]}, [{"access_token": ...}], {"access_token": ...})
+    - Line-by-line format:
+        - raw JWT access_token (eyJ...)
+        - email----access_token
+        - email----password----access_token
+        - email access_token (whitespace separated)
+    """
+    s = str(text or "").strip()
+    if not s:
+        return []
+
+    # Try JSON first
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            parsed = json.loads(s)
+            records = extract_auth_records_from_data(parsed, "pasted.json")
+            if records:
+                return records
+        except Exception:
+            pass
+
+    records: list[dict] = []
+    seen: set[str] = set()
+    for idx, raw_line in enumerate(s.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        email = ""
+        token = ""
+        if "----" in line:
+            parts = [p.strip() for p in line.split("----") if p.strip()]
+            if parts:
+                email = parts[0]
+                for p in parts[1:]:
+                    if p.startswith("eyJ"):
+                        token = p
+                        break
+                if not token and len(parts) >= 2:
+                    token = parts[-1]
+        elif line.startswith("eyJ"):
+            token = line
+        else:
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].startswith("eyJ"):
+                email = parts[0]
+                token = parts[1]
+            elif parts and parts[0].startswith("eyJ"):
+                token = parts[0]
+            else:
+                token = line
+
+        if token and token not in seen:
+            seen.add(token)
+            records.append({
+                "email": email or f"pasted-{idx}@manual",
+                "access_token": token,
+                "token_type": "Bearer",
+                "_path": "pasted",
+                "_file": "pasted-input",
+            })
+
+    return records
+
+
 def load_auth_records(dirs: list[Path], *, limit: int = 0) -> list[dict]:
     records: list[dict] = []
     seen: set[str] = set()
@@ -488,36 +605,19 @@ def load_auth_records(dirs: list[Path], *, limit: int = 0) -> list[dict]:
                 data = json.loads(path.read_text(encoding="utf-8") or "{}")
             except Exception:
                 continue
-            if not isinstance(data, dict):
-                continue
-            # Grok2API nested issuer::client_id
-            if "access_token" not in data and "key" not in data:
-                nested = None
-                for value in data.values():
-                    if isinstance(value, dict) and (
-                        value.get("access_token") or value.get("key")
-                    ):
-                        nested = value
-                        break
-                if nested is None:
+            extracted = extract_auth_records_from_data(data, str(path))
+            for item in extracted:
+                access = str(item.get("access_token") or item.get("key") or "").strip()
+                if not access:
                     continue
-                data = dict(nested)
-            access = str(data.get("access_token") or data.get("key") or "").strip()
-            if not access:
-                continue
-            email = str(data.get("email") or "").strip()
-            ident = email or path.name
-            if ident in seen:
-                continue
-            seen.add(ident)
-            item = dict(data)
-            item["_path"] = str(path)
-            item["_file"] = path.name
-            if email and not item.get("email"):
-                item["email"] = email
-            records.append(item)
-            if limit and len(records) >= limit:
-                return records
+                email = str(item.get("email") or item.get("name") or "").strip()
+                ident = email or access[:32] or path.name
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                records.append(item)
+                if limit and len(records) >= limit:
+                    return records
     return records
 
 

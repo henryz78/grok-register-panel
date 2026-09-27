@@ -23,6 +23,7 @@ from quality_probe import (
     MIN_OUTPUT_TOKENS,
     SOFT_TPS,
     load_auth_records,
+    parse_pasted_quality_records,
     public_row,
     run_quality_scan,
 )
@@ -49,7 +50,7 @@ DEGRADED_EXPORT = LOG_DIR / "quality_degraded.jsonl"
 RISK_EXPORT = LOG_DIR / "quality_risk.jsonl"
 
 MAX_RECORDS = 2000
-VALID_SOURCES = ("cpa", "g2a", "all")
+VALID_SOURCES = ("cpa", "g2a", "all", "paste")
 
 _lock = threading.Lock()
 _cancel = threading.Event()
@@ -199,7 +200,7 @@ def resolve_probe_proxies(explicit: str = "", *, prefer_home: bool = True) -> li
 def source_counts() -> dict:
     cpa = load_auth_records(_resolve_auth_dirs("cpa"))
     g2a = load_auth_records(_resolve_auth_dirs("g2a"))
-    return {"cpa": len(cpa), "g2a": len(g2a), "all": len(cpa) + len(g2a)}
+    return {"cpa": len(cpa), "g2a": len(g2a), "all": len(cpa) + len(g2a), "paste": 0}
 
 
 def _public_summary(summary: dict) -> dict:
@@ -373,6 +374,7 @@ def _run_job(
 def start_quality_scan(
     *,
     source: str = "cpa",
+    raw_input: str = "",
     proxy: str = "",
     prefer_home: bool = True,
     workers: int = DEFAULT_WORKERS,
@@ -396,9 +398,16 @@ def start_quality_scan(
         return {"ok": False, "error": "invalid limit"}
     cap = MAX_RECORDS if requested <= 0 else max(1, min(MAX_RECORDS, requested))
 
-    records = load_auth_records(_resolve_auth_dirs(normalized), limit=cap)
-    if not records:
-        return {"ok": False, "error": "没有可用的 CPA / Grok2API auth"}
+    if normalized == "paste":
+        records = parse_pasted_quality_records(raw_input)
+        if not records:
+            return {"ok": False, "error": "未解析到有效的账号或 Token（请粘贴 JSON 或 Token 列表）"}
+        if cap and len(records) > cap:
+            records = records[:cap]
+    else:
+        records = load_auth_records(_resolve_auth_dirs(normalized), limit=cap)
+        if not records:
+            return {"ok": False, "error": "没有可用的 CPA / Grok2API auth"}
 
     proxies = resolve_probe_proxies(proxy, prefer_home=bool(prefer_home))
     proxy_mode = "explicit" if str(proxy or "").strip() else ("home" if prefer_home else "pool")
