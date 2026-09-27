@@ -9,8 +9,9 @@
 git clone https://github.com/henryz78/grok-register-panel.git
 cd grok-register-panel
 
-# Linux 无桌面环境（无 DISPLAY）请先安装 xvfb 虚拟显示支持：
-sudo apt update && sudo apt install -y xvfb   # Debian / Ubuntu (CentOS: yum install -y xorg-x11-server-Xvfb)
+# Linux 无桌面环境请安装 xvfb 虚拟显示与浏览器运行库（Debian/Ubuntu/Codespaces）：
+sudo apt update && sudo apt install -y xvfb libgtk-3-0 libasound2 libdbus-glib-1-2 libxt6
+# 或运行：.venv/bin/python -m playwright install-deps
 
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip

@@ -113,8 +113,9 @@ Linux 容器必须保留 procfs（通常为默认的 `/proc` 挂载），面板�
 git clone https://github.com/henryz78/grok-register-panel.git
 cd grok-register-panel
 
-# Linux 无头服务器（VPS / SSH 终端）先安装虚拟显示支持：
-sudo apt update && sudo apt install -y xvfb   # Debian / Ubuntu (CentOS: yum install -y xorg-x11-server-Xvfb)
+# Linux 无头服务器（VPS / Codespaces）先安装虚拟显示与浏览器底层支持库：
+sudo apt update && sudo apt install -y xvfb libgtk-3-0 libasound2 libdbus-glib-1-2 libxt6
+# 或运行：python -m playwright install-deps
 
 python3 -m venv .venv
 source .venv/bin/activate          # Linux / macOS
