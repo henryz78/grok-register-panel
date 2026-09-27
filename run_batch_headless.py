@@ -199,9 +199,17 @@ def main(argv: list[str] | None = None) -> int:
         target=count,
         workers=workers,
     )
+    task_dir_env = str(os.environ.get("GROK_TASK_DIR", "") or "").strip()
+    if not task_dir_env:
+        task_dir_path = ROOT / "accounts" / f"task_{time.strftime('%Y%m%d_%H%M%S')}"
+        task_dir_path.mkdir(parents=True, exist_ok=True)
+        task_dir_env = str(task_dir_path.resolve())
+        os.environ["GROK_TASK_DIR"] = task_dir_env
+
     child_env = {
         BATCH_ID_ENV: batch_id,
         TRAFFIC_FILE_ENV: str(traffic_file),
+        "GROK_TASK_DIR": task_dir_env,
     }
     result = 1
     try:

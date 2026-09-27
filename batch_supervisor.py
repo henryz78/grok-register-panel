@@ -238,6 +238,14 @@ def run_supervisor(
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, request_stop)
 
+    task_dir_env = str(
+        (child_env or {}).get("GROK_TASK_DIR")
+        or os.environ.get("GROK_TASK_DIR")
+        or ""
+    ).strip()
+    if not task_dir_env:
+        task_dir_env = str((Path("accounts") / f"task_{time.strftime('%Y%m%d_%H%M%S')}").resolve())
+
     try:
         while not stop_requested:
             completed = read_completed(progress_path)
@@ -258,6 +266,7 @@ def run_supervisor(
             command = [str(part) for part in child_command_builder(remaining, worker_count)]
             env = {**os.environ, **dict(child_env or {})}
             env[PROGRESS_ENV] = str(progress_path)
+            env["GROK_TASK_DIR"] = task_dir_env
             print(
                 f"[supervisor] starting child remaining={remaining} workers={worker_count} restart={restarts}",
                 flush=True,

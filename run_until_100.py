@@ -105,6 +105,21 @@ def kill_batch() -> None:
     terminate_managed_processes(ROOT, ("run_batch_headless.py",))
 
 
+ORCH_TASK_DIR = None
+
+
+def get_orch_task_dir() -> str:
+    global ORCH_TASK_DIR
+    if not ORCH_TASK_DIR:
+        env_td = os.environ.get("GROK_TASK_DIR", "").strip()
+        if env_td:
+            ORCH_TASK_DIR = env_td
+        else:
+            ORCH_TASK_DIR = str((ROOT / "accounts" / f"task_{time.strftime('%Y%m%d_%H%M%S')}").resolve())
+            os.environ["GROK_TASK_DIR"] = ORCH_TASK_DIR
+    return ORCH_TASK_DIR
+
+
 def start_batch(count: int):
     logname = LOG_DIR / f"batch-orch-{time.strftime('%Y%m%d-%H%M%S')}-n{count}.log"
     fd = os.open(logname, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -113,6 +128,7 @@ def start_batch(count: int):
     try:
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        env["GROK_TASK_DIR"] = get_orch_task_dir()
         if os.name == "nt":
             env.setdefault("GROK_HEADLESS", "1")
             env.setdefault("PYTHONUTF8", "1")

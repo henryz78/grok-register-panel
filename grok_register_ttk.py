@@ -144,16 +144,87 @@ _current_task_dir = None
 _current_task_lock = threading.Lock()
 
 
-def init_task_dir(task_name=None):
-    """为当前任务批次初始化独立的输出目录 accounts/task_YYYYMMDD_HHMMSS/。"""
+def _ensure_task_summary_files(task_dir: str):
+    """确保任务目录下有 accounts.txt、sso.txt 以及 summary.json 汇总文件。"""
+    try:
+        ensure_private_dir(task_dir)
+        acc_file = os.path.join(task_dir, "accounts.txt")
+        sso_file = os.path.join(task_dir, "sso.txt")
+        if not os.path.exists(acc_file):
+            append_private_text(acc_file, "")
+        if not os.path.exists(sso_file):
+            append_private_text(sso_file, "")
+
+        summary_file = os.path.join(task_dir, "summary.json")
+        if not os.path.exists(summary_file):
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            atomic_write_json(
+                summary_file,
+                {
+                    "task_id": os.path.basename(task_dir),
+                    "created_at": now_str,
+                    "updated_at": now_str,
+                    "total_success": 0,
+                    "accounts_file": "accounts.txt",
+                    "sso_file": "sso.txt",
+                },
+            )
+    except Exception:
+        pass
+
+
+def _increment_task_summary(task_dir: str, email: str = ""):
+    """原子更新当前任务子目录的 summary.json 统计。"""
+    summary_file = os.path.join(task_dir, "summary.json")
+    try:
+        data = {}
+        if os.path.exists(summary_file):
+            try:
+                with open(summary_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data["task_id"] = os.path.basename(task_dir)
+        data["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data["total_success"] = int(data.get("total_success", 0)) + 1
+        data["accounts_file"] = "accounts.txt"
+        data["sso_file"] = "sso.txt"
+        atomic_write_json(summary_file, data)
+    except Exception:
+        pass
+
+
+def init_task_dir(task_name=None, reuse_active=True):
+    """为当前任务批次初始化独立的输出目录 accounts/task_YYYYMMDD_HHMMSS/。
+
+    并发与单目录保障规则：
+    1. 若未显式传入 task_name，且当前进程已存在有效 _current_task_dir 且 reuse_active=True，直接复用该目录。
+    2. 若未显式传入 task_name，且环境变量 GROK_TASK_DIR 存在有效路径，直接复用该环境变量指定的目录。
+    3. 否则创建新目录 accounts/task_YYYYMMDD_HHMMSS/。
+    4. 初始化时自动生成 accounts.txt、sso.txt 及 summary.json 汇总文件。
+    5. 设置 os.environ['GROK_TASK_DIR'] 以便所有并发 worker 和子进程共享同一个目录。
+    """
     global _current_task_dir
     with _current_task_lock:
+        if reuse_active and _current_task_dir and os.path.isdir(_current_task_dir) and not task_name:
+            return _current_task_dir
+
+        env_task_dir = os.environ.get("GROK_TASK_DIR", "").strip()
+        if env_task_dir and not task_name:
+            task_dir = os.path.abspath(env_task_dir)
+            ensure_private_dir(task_dir)
+            _ensure_task_summary_files(task_dir)
+            _current_task_dir = task_dir
+            return _current_task_dir
+
         ensure_accounts_dir()
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = task_name or f"task_{ts}"
         task_dir = os.path.join(ACCOUNTS_DIR, name)
         ensure_private_dir(task_dir)
+        _ensure_task_summary_files(task_dir)
         _current_task_dir = task_dir
+        os.environ["GROK_TASK_DIR"] = task_dir
         return _current_task_dir
 
 
@@ -209,31 +280,35 @@ def extract_jwt_token(sso_str: str) -> str:
     return s
 
 
-def save_account_record(email: str, password: str, sso: str, alock=None):
-    """保存注册成功的账号：同时追加写入当前任务目录和全局汇总，不再生成单个 email.txt。"""
+def save_account_record(email: str, password: str, sso: str, alock=None, dev_token=None):
+    """保存注册成功的账号：同时追加写入当前任务目录和全局汇总，不再生成单个 email.txt。仅记录成功账号。"""
     line = f"{email}----{password}----{sso}\n"
     jwt_line = f"{extract_jwt_token(sso)}\n"
 
+    td = get_current_task_dir()
     task_acc = task_side_file("accounts.txt")
     task_sso = task_side_file("sso.txt")
     global_acc = accounts_side_file("accounts.txt")
     global_sso = accounts_side_file("sso.txt")
 
-    if alock:
-        with alock:
-            append_private_text(task_acc, line)
-            append_private_text(task_sso, jwt_line)
-            append_private_text(global_acc, line)
-            append_private_text(global_sso, jwt_line)
-    else:
+    def _write_all():
         append_private_text(task_acc, line)
         append_private_text(task_sso, jwt_line)
         append_private_text(global_acc, line)
         append_private_text(global_sso, jwt_line)
+        if dev_token:
+            append_mail_credential(email, dev_token)
+        _increment_task_summary(td, email)
+
+    if alock:
+        with alock:
+            _write_all()
+    else:
+        _write_all()
 
 
 def append_mail_credential(email: str, dev_token: str):
-    """记录临时邮箱凭证到当前任务目录与全局汇总。"""
+    """记录临时邮箱凭证到当前任务目录与全局汇总（仅在账号注册成功后调用）。"""
     line = f"{email}\t{dev_token}\n"
     try:
         append_private_text(task_side_file("mail_credentials.txt"), line)
@@ -1122,15 +1197,11 @@ def _append_sso_pending(email: str, sso: str, log_callback=None):
 
 
 def _append_sso_risk_rejected(email: str, sso: str, details: str, log_callback=None):
-    """保存注册风控拒绝的 SSO，同时记录到当前任务与全局名单。"""
+    """保存注册风控拒绝的 SSO，记录到全局名单（用于恢复与隔离，任务子目录不产生失败残留）。"""
     try:
         safe_details = re.sub(r"[\r\n\t]+", " ", str(details or "")).strip()
         line = f"{email}----{sso}----{safe_details}\n"
         append_private_text(accounts_side_file("sso_risk_rejected.txt"), line)
-        try:
-            append_private_text(task_side_file("sso_risk_rejected.txt"), line)
-        except Exception:
-            pass
         if log_callback:
             log_callback(f"[CPA] 已保存注册风控拒绝记录 → {accounts_side_file('sso_risk_rejected.txt')}")
     except Exception as exc:
@@ -1139,15 +1210,11 @@ def _append_sso_risk_rejected(email: str, sso: str, details: str, log_callback=N
 
 
 def _append_sso_bfs_flagged(email: str, sso: str, details: str, log_callback=None):
-    """保存 JWT bfs 标记账号，同时记录到当前任务与全局名单。"""
+    """保存 JWT bfs 标记账号，记录到全局名单（任务子目录保持仅存放成功账号）。"""
     try:
         safe_details = re.sub(r"[\r\n\t]+", " ", str(details or "")).strip()
         line = f"{email}----{sso}----{safe_details}\n"
         append_private_text(accounts_side_file("sso_bfs_flagged.txt"), line)
-        try:
-            append_private_text(task_side_file("sso_bfs_flagged.txt"), line)
-        except Exception:
-            pass
         if log_callback:
             log_callback(f"[CPA] 已保存 bfs 标记记录 → {accounts_side_file('sso_bfs_flagged.txt')}")
     except Exception as exc:
@@ -4119,7 +4186,6 @@ class GrokRegisterGUI:
                         )
                         wlog(f"[*] 邮箱: {email}")
                         wlog(f"[Debug] 邮箱 token 已获取 (len={len(str(dev_token or ''))})")
-                        append_mail_credential(email, dev_token)
                         wlog("[*] 3. 拉取验证码")
                         try:
                             code = fill_code_and_submit(
@@ -4176,6 +4242,7 @@ class GrokRegisterGUI:
                             profile.get("password", ""),
                             sso,
                             alock=getattr(self, "_accounts_lock", None),
+                            dev_token=dev_token,
                         )
                     except Exception as file_exc:
                         wlog(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")
@@ -4493,7 +4560,6 @@ def run_registration_cli(count):
                             log_callback=lambda m: cli_log(f"[W{wid+1}] {m}"),
                             cancel_callback=controller.should_stop,
                         )
-                        append_mail_credential(email, dev_token)
                         code = fill_code_and_submit(
                             email,
                             dev_token,
@@ -4529,6 +4595,7 @@ def run_registration_cli(count):
                                 profile.get("password", ""),
                                 sso,
                                 alock=accounts_lock,
+                                dev_token=dev_token,
                             )
                         except Exception as file_exc:
                             cli_log(
@@ -4868,7 +4935,6 @@ def run_registration_cli(count):
                         log_callback=cli_log, cancel_callback=controller.should_stop
                     )
                     cli_log(f"[*] 邮箱: {email}")
-                    append_mail_credential(email, dev_token)
                     cli_log("[*] 3. 拉取验证码")
                     try:
                         code = fill_code_and_submit(
@@ -4922,6 +4988,7 @@ def run_registration_cli(count):
                         profile.get("password", ""),
                         sso,
                         alock=None,
+                        dev_token=dev_token,
                     )
                 except Exception as file_exc:
                     cli_log(f"[!] 保存账号文件失败，当前账号不计为成功: {file_exc}")

@@ -779,12 +779,15 @@ def _start_orch_unlocked():
     )
     stdout.flush()
     try:
+        task_dir_path = ROOT / "accounts" / f"task_{time.strftime('%Y%m%d_%H%M%S')}"
+        orch_env = _registration_env()
+        orch_env["GROK_TASK_DIR"] = str(task_dir_path.resolve())
         p = subprocess.Popen(
             [str(VENV_PY), "-u", str(ORCH_SCRIPT)],
             cwd=str(ROOT),
             stdout=stdout,
             stderr=subprocess.STDOUT,
-            env=_registration_env(),
+            env=orch_env,
             **popen_group_kwargs(),
         )
     finally:
@@ -832,6 +835,9 @@ def _start_batch_only_unlocked():
     best_effort_fchmod(fd, 0o600)
     fout = os.fdopen(fd, "w", encoding="utf-8")
     try:
+        task_dir_path = ROOT / "accounts" / f"task_{time.strftime('%Y%m%d_%H%M%S')}"
+        batch_env = _registration_env()
+        batch_env["GROK_TASK_DIR"] = str(task_dir_path.resolve())
         p = subprocess.Popen(
             batch_launch_command(
                 ROOT,
@@ -842,7 +848,7 @@ def _start_batch_only_unlocked():
             cwd=str(ROOT),
             stdout=fout,
             stderr=subprocess.STDOUT,
-            env=_registration_env(),
+            env=batch_env,
             **popen_group_kwargs(),
         )
     finally:
